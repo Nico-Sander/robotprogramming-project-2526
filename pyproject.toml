@@ -1,0 +1,16 @@
+[project]
+name = "intro-to-pathplanning"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [ 
+	"pandas",
+	"matplotlib", 
+	"scikit-learn", 
+	"jupyterlab",
+    "networkx",
+    "shapely",
+    "numpy",
+	"tqdm",
+    "ipywidgets",
+	"sympy"
+]
