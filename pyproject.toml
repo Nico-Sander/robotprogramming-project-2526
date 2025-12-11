@@ -1,3 +1,7 @@
+# 1. UV installieren
+# 2. run: uv sync
+# 3. activate environment: source .venv/bin/activate
+
 [project]
 name = "robot-programming-env"
 version = "0.1.0"
