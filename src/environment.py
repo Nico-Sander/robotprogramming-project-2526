@@ -254,3 +254,5 @@ class CollisionChecker(object):
         ax.text(x_val[-1], y_val[-1], "G", fontweight="heavy", size=16, ha="center", va="center")
 
         return ax
+    
+
