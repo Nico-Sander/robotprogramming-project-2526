@@ -218,7 +218,7 @@ class CollisionChecker(object):
         return False
 
     
-    def create_axes(self, figsize: tuple = (10,10)) -> plt.Axes:
+    def create_axes(self, figsize: tuple = (8, 8)) -> plt.Axes:
         _, ax = plt.subplots(figsize=figsize)
         ax.set_xlim(self.limits[0][0], self.limits[0][1])
         ax.set_ylim(self.limits[1][0], self.limits[1][1])
