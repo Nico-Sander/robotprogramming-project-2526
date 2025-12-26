@@ -97,7 +97,7 @@ def construct_benchmark_environments():
     start = (2.0, 2.0)
     goal = (18.0, 2.0)
 
-    solution_positions = [start, (4.0, 10.0), (8.0, 10.0), (9.0, 7.0), (16.0, 7.0), goal]
+    solution_positions = [start, (4.5, 9.5), (9.0, 10.0), (12.0, 7.0), (16.0, 6.5), goal]
 
     env_dict["1"] = dict()
     env_dict["1"]["env"] = env_1
@@ -107,9 +107,9 @@ def construct_benchmark_environments():
 
     ## Environment 2
     env_2 = dict()
-    env_2["obs_1"] = Polygon([(0.0, 2.0), (16.0, 2.0), (16.0, 3.0), (0.0, 3.0)])
+    env_2["obs_1"] = Polygon([(0.0, 2.0),(15.0, 2.0), (15.5, 1.5), (16.0, 2.0), (16.0, 3.0), (0.0, 3.0)])
     env_2["obs_2"] = Polygon([(10.0, 5.0), (20.0, 5.0), (20.0, 6.0), (10.0, 6.0)])
-    env_2["obs_3"] = Polygon([(0.0, 8.0), (16.0, 8.0), (16.0, 9.0), (0.0, 9.0)])
+    env_2["obs_3"] = Polygon([(0.0, 8.0), (16.0, 8.0), (16.0, 10.0), (0.0, 10.0)])
     env_2["obs_4"] = Polygon([(2.0, 11.0), (20.0, 11.0), (20.0, 12.0), (2.0, 12.0)])
     env_2["obs_5"] = Polygon([(0.0, 14.0), (5.0, 14.0), (5.0, 15.0), (0.0, 15.0)])
     env_2["obs_6"] = Polygon([(4.0, 17.0), (20.0, 17.0), (20.0, 18.0), (4.0, 18.0)])
@@ -117,8 +117,8 @@ def construct_benchmark_environments():
     start = (3.0, 1.0)
     goal = (10.0, 19.0)
 
-    solution_positions = [start, (17.0, 1.0), (17.0, 4.0), (9.0, 4.0), (9.0, 7.0), (17.0, 7.0), (17.0, 10.0), 
-                        (1.0, 10.0), (1.0, 13.0), (6.0, 13.0), (6.0, 16.0), (3.0, 16.0), (3.0, 19.0), goal]
+    solution_positions = [start, (17.0, 1.0), (17.0, 4.0), (9.5, 4.0), (9.5, 7.0), (17.0, 7.0), (17.0, 10.5), 
+                        (1.0, 10.5), (1.0, 13.0), (6.0, 13.0), (6.0, 16.0), (3.0, 16.0), (3.0, 19.0), goal]
 
 
     env_dict["2"] = dict()
@@ -150,14 +150,15 @@ def construct_benchmark_environments():
     env_dict["3"]["smooth_path"] = solution_positions
     # pprint.pprint(env_dict)
 
+    ## Environment 4
     env_4 = dict()
     env_4["obs_1"] = fillet_corner_if_exists(
         Polygon([(0, 9.5), (6, 12.5), (5, 7), (13, 13), (17, 0), (0, 0)]),
         (13.0, 13.0),
-        4
+        4.5
     )
     env_4["obs_2"] = fillet_corner_if_exists(
-        Polygon([(0, 12.0), (8, 16.0), (7.5, 12), (14, 17.0), (20.0, 0), (20, 20), (0, 20)]),
+        Polygon([(0, 12.0), (8, 16.0), (7.5, 12), (14, 11.0), (20.0, 0), (20, 20), (0, 20)]),
         (8.0, 16.0),
         1
     )
@@ -165,7 +166,7 @@ def construct_benchmark_environments():
     start = (1.0, 11.25)
     goal = (18.25, 1.0)
 
-    solution_positions = [start, (7, 14.25), (6.5, 10), (13.5, 15), goal]
+    solution_positions = [start, (6, 13), (6.5, 10), (13.5, 10.5), goal]
 
     env_dict["4"] = dict()
     env_dict["4"]["env"] = env_4
@@ -217,6 +218,21 @@ class CollisionChecker(object):
         
         return False
 
+    def parabolaInCollision(self, startPos, anchorPos, endPos, r):
+        """ Check whether a parabola from startPos to endPos is colliding"""
+        assert (len(startPos) == self.getDim())
+        assert (len(endPos) == self.getDim())
+
+        P1 = np.array(startPos)
+        P2 = np.array(anchorPos)
+        P3 = np.array(endPos)
+        
+        for t in np.linspace(0, 1, 40):
+            testPoint = r * (P2 - P1) * (t - 1.0)**2 + r * (P2 - P3) * t**2 + P2
+            if self.pointInCollision(testPoint)==True:
+                return True
+        
+        return False
     
     def create_axes(self, figsize: tuple = (10,10)) -> plt.Axes:
         _, ax = plt.subplots(figsize=figsize)
@@ -254,3 +270,58 @@ class CollisionChecker(object):
         ax.text(x_val[-1], y_val[-1], "G", fontweight="heavy", size=16, ha="center", va="center")
 
         return ax
+
+    def draw_path_with_parabolas(self, path_positions: list, r: list, ax: plt.Axes = None) -> plt.Axes:
+        """Draws a path with parabolas connecting the nodes according to r
+        
+        Args:
+            path_positions (list): List of path positions
+            r (list): List of r values at the path positions
+            ax (plt.Axes, optional): Axes to draw on. Defaults to None.
+        """
+        if not ax:
+            ax = self.create_axes()
+
+        line_ending = path_positions[0]
+
+        for i in range(1, len(path_positions) - 1):
+            ax.scatter(path_positions[i][0], path_positions[i][1], color="k", marker="x")
+            ax.text(path_positions[i][0], path_positions[i][1], round(r[i], 2), size=12, ha="center", va="bottom")
+            if r[i] == 0:
+                # Draw a line from position i-1 to position i
+                ax.plot([path_positions[i-1][0], path_positions[i][0]], [path_positions[i-1][1], path_positions[i][1]], color="k")
+                line_ending = path_positions[i]
+
+            else:
+                # Calculate S and E
+                P2 = np.array(path_positions[i])
+                P1 = np.array(path_positions[i - 1])
+                P3 = np.array(path_positions[i + 1])
+
+                # Calculate the vectors originating from P2
+                vec_P2_P1 = P1 - P2
+                vec_P2_P3 = P3 - P2
+
+               
+                S = P2 + r[i] * vec_P2_P1
+                E = P2 + r[i] * vec_P2_P3
+
+                # Draw a line from the previous segment ending to S
+                ax.plot([line_ending[0], S[0]], [line_ending[1], S[1]], color="k")
+                line_ending = S
+
+
+                t = np.linspace(0, 1, 100)
+                t_col = t[:, np.newaxis]
+
+                curve = r[i] * vec_P2_P1 * (t_col - 1.0)**2 + r[i] * vec_P2_P3 * t_col**2 + P2
+
+                ax.plot(curve[:, 0], curve[:, 1], color="b")
+                line_ending = E
+
+        # Draw a line from line_ending to the last position
+        ax.plot([line_ending[0], path_positions[-1][0]], [line_ending[1], path_positions[-1][1]], color="k")
+
+        return ax
+
+               
