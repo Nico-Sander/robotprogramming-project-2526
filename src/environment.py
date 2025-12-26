@@ -3,6 +3,7 @@ from planners.IPPerfMonitor import IPPerfMonitor
 import numpy as np
 import matplotlib.pyplot as plt
 from shapely import plotting
+import networkx as nx
 
 X_LIMITS = [0.0, 20.0]
 Y_LIMITS = [0.0, 20.0]
@@ -218,18 +219,29 @@ class CollisionChecker(object):
         
         return False
 
-    def parabolaInCollision(self, startPos, anchorPos, endPos, r):
-        """ Check whether a parabola from startPos to endPos is colliding"""
+    @IPPerfMonitor
+    def curveInCollision(self, startPos, controlPos, endPos, steps=50):
+        """ 
+        Check whether a Quadratic Bezier curve is in collision.
+        Defined by: Start (startPos), Control Point (controlPos), End (endPos)
+        """
         assert (len(startPos) == self.getDim())
+        assert (len(controlPos) == self.getDim())
         assert (len(endPos) == self.getDim())
-
-        P1 = np.array(startPos)
-        P2 = np.array(anchorPos)
-        P3 = np.array(endPos)
         
-        for t in np.linspace(0, 1, 40):
-            testPoint = r * (P2 - P1) * (t - 1.0)**2 + r * (P2 - P3) * t**2 + P2
-            if self.pointInCollision(testPoint)==True:
+        S = np.array(startPos)
+        P2n = np.array(controlPos)
+        E = np.array(endPos)
+
+        # Generate t values from 0 to 1
+        t_values = np.linspace(0, 1, steps)
+
+        for t in t_values:
+            # Quadratic Bezier Formula
+            # B(t) = (1-t)^2 * S + 2*(1-t)*t * P2n + t^2 * E
+            p_curve = (1-t)**2 * S + 2*(1-t)*t * P2n + t**2 * E
+            
+            if self.pointInCollision(p_curve):
                 return True
         
         return False
@@ -268,6 +280,107 @@ class CollisionChecker(object):
         # Goal
         ax.scatter(x_val[-1], y_val[-1], marker="o", color="lightblue", s=300)
         ax.text(x_val[-1], y_val[-1], "G", fontweight="heavy", size=16, ha="center", va="center")
+
+        return ax
+
+    def draw_optimized_path(self, optimized_results, planner, ax=None):
+        """
+        Visualizes the path with Flyby (Inverse Rounding) curves.
+        - Shows original path in grey.
+        - Shows smooth path in blue.
+        - Shows Control Points (P2n) in red.
+        
+        Args:
+            optimized_results: List of tuples [(node_name, r), ...]
+            planner: The planner instance (to look up node coordinates).
+            ax: Matplotlib axes.
+        """
+        if not ax:
+            ax = self.create_axes()
+        
+        # 1. Extract Node Names and R-values
+        node_names = [item[0] for item in optimized_results]
+        r_values = [item[1] for item in optimized_results]
+        
+        # 2. Retrieve Positions
+        raw_positions = retrieve_path_positions(planner.graph, node_names)
+        positions = [np.array(p) for p in raw_positions]
+
+        # --- Draw Original Path (Background) ---
+        orig_x = [p[0] for p in positions]
+        orig_y = [p[1] for p in positions]
+        ax.plot(orig_x, orig_y, color="lightgray", linewidth=1.5, linestyle="--", label="Original Path")
+
+        # 3. Draw Start Node
+        last_endpoint = positions[0] 
+        ax.scatter(last_endpoint[0], last_endpoint[1], marker="o", color="lightgreen", s=300, zorder=5)
+        ax.text(last_endpoint[0], last_endpoint[1], "S", fontweight="heavy", ha="center", va="center")
+
+        # 4. Iterate through intermediate nodes
+        for i in range(1, len(positions) - 1):
+            p_prev = positions[i-1]
+            p_curr = positions[i]
+            p_next = positions[i+1]
+            r = r_values[i]
+            
+            # Draw the original waypoint lightly for reference
+            ax.scatter(p_curr[0], p_curr[1], marker="x", color="gray", alpha=0.5)
+            # Display the r value next to the node
+            ax.text(p_curr[0], p_curr[1] + 0.5, f"r={r}", color="blue", fontsize=8, ha="center")
+
+            # --- CASE A: No Smoothing (r=0) ---
+            if r == 0:
+                ax.plot([last_endpoint[0], p_curr[0]], [last_endpoint[1], p_curr[1]], 'k-')
+                last_endpoint = p_curr 
+                continue
+
+            # --- CASE B: Flyby Smoothing ---
+            dist_prev = np.linalg.norm(p_curr - p_prev)
+            dist_next = np.linalg.norm(p_next - p_curr)
+            prev_is_shorter = dist_prev <= dist_next
+            
+            if prev_is_shorter:
+                k = dist_prev / dist_next if dist_next > 0 else 1.0
+                S = p_curr + r * (p_prev - p_curr)
+                E = p_curr + (r * k) * (p_next - p_curr)
+            else:
+                k = dist_next / dist_prev if dist_prev > 0 else 1.0
+                S = p_curr + (r * k) * (p_prev - p_curr)
+                E = p_curr + r * (p_next - p_curr)
+
+            # Draw Straight Line (Connection)
+            ax.plot([last_endpoint[0], S[0]], [last_endpoint[1], S[1]], 'k-')
+            
+            # Calculate Control Point (Inverse Rounding)
+            P2n = 2 * p_curr - 0.5 * S - 0.5 * E
+            
+            # --- NEW: Draw Control Point P2n and Construction Lines ---
+            ax.scatter(P2n[0], P2n[1], marker="*", color="red", s=100, zorder=4) # The Star
+            ax.text(P2n[0], P2n[1] + 0.3, "P2n", color="red", fontsize=8, ha="center")
+            # Optional: Draw the triangle S -> P2n -> E to see the hull
+            ax.plot([S[0], P2n[0], E[0]], [S[1], P2n[1], E[1]], color="red", linestyle=":", linewidth=1, alpha=0.6)
+
+            # Draw The Curve
+            t_steps = np.linspace(0, 1, 20)
+            curve_x = []
+            curve_y = []
+            for t in t_steps:
+                p = (1-t)**2 * S + 2*(1-t)*t * P2n + t**2 * E
+                curve_x.append(p[0])
+                curve_y.append(p[1])
+            
+            ax.plot(curve_x, curve_y, 'b-', linewidth=2) 
+            
+            # Update last_endpoint
+            last_endpoint = E
+
+        # 5. Draw Final Segment to Goal
+        goal = positions[-1]
+        ax.plot([last_endpoint[0], goal[0]], [last_endpoint[1], goal[1]], 'k-')
+        
+        # Draw Goal Node
+        ax.scatter(goal[0], goal[1], marker="o", color="lightblue", s=300, zorder=5)
+        ax.text(goal[0], goal[1], "G", fontweight="heavy", ha="center", va="center")
 
         return ax
 
@@ -325,3 +438,5 @@ class CollisionChecker(object):
         return ax
 
                
+def retrieve_path_positions(graph: nx.Graph, node_names: list) -> list:
+    return [graph.nodes[name]["pos"] for name in node_names]
