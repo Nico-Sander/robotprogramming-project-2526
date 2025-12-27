@@ -286,14 +286,7 @@ class CollisionChecker(object):
     def draw_optimized_path(self, optimized_results, planner, ax=None):
         """
         Visualizes the path with Flyby (Inverse Rounding) curves.
-        - Shows original path in grey.
-        - Shows smooth path in blue.
-        - Shows Control Points (P2n) in red.
-        
-        Args:
-            optimized_results: List of tuples [(node_name, r), ...]
-            planner: The planner instance (to look up node coordinates).
-            ax: Matplotlib axes.
+        Handles both Dynamic K (Symmetric) and Fixed K (Asymmetric) modes.
         """
         if not ax:
             ax = self.create_axes()
@@ -303,6 +296,7 @@ class CollisionChecker(object):
         r_values = [item[1] for item in optimized_results]
         
         # 2. Retrieve Positions
+        # Assuming retrieve_path_positions is available in scope or imported
         raw_positions = retrieve_path_positions(planner.graph, node_names)
         positions = [np.array(p) for p in raw_positions]
 
@@ -318,14 +312,14 @@ class CollisionChecker(object):
 
         # 4. Iterate through intermediate nodes
         for i in range(1, len(positions) - 1):
+            node_name = node_names[i]
             p_prev = positions[i-1]
             p_curr = positions[i]
             p_next = positions[i+1]
             r = r_values[i]
             
-            # Draw the original waypoint lightly for reference
+            # Draw the original waypoint lightly
             ax.scatter(p_curr[0], p_curr[1], marker="x", color="gray", alpha=0.5)
-            # Display the r value next to the node
             ax.text(p_curr[0], p_curr[1] + 0.5, f"r={r}", color="blue", fontsize=8, ha="center")
 
             # --- CASE A: No Smoothing (r=0) ---
@@ -335,29 +329,39 @@ class CollisionChecker(object):
                 continue
 
             # --- CASE B: Flyby Smoothing ---
-            dist_prev = np.linalg.norm(p_curr - p_prev)
-            dist_next = np.linalg.norm(p_next - p_curr)
-            prev_is_shorter = dist_prev <= dist_next
             
-            if prev_is_shorter:
-                k = dist_prev / dist_next if dist_next > 0 else 1.0
+            # Check for Fixed K in the graph attributes
+            fixed_k = planner.graph.nodes[node_name].get('fixed_k')
+
+            if fixed_k is not None:
+                # --- FIXED K LOGIC ---
+                # r is always on the incoming (prev) segment
+                k = fixed_k
                 S = p_curr + r * (p_prev - p_curr)
                 E = p_curr + (r * k) * (p_next - p_curr)
             else:
-                k = dist_next / dist_prev if dist_prev > 0 else 1.0
-                S = p_curr + (r * k) * (p_prev - p_curr)
-                E = p_curr + r * (p_next - p_curr)
+                # --- DYNAMIC K LOGIC (Metric Symmetry) ---
+                dist_prev = np.linalg.norm(p_curr - p_prev)
+                dist_next = np.linalg.norm(p_next - p_curr)
+                prev_is_shorter = dist_prev <= dist_next
+                
+                if prev_is_shorter:
+                    k = dist_prev / dist_next if dist_next > 0 else 1.0
+                    S = p_curr + r * (p_prev - p_curr)
+                    E = p_curr + (r * k) * (p_next - p_curr)
+                else:
+                    k = dist_next / dist_prev if dist_prev > 0 else 1.0
+                    S = p_curr + (r * k) * (p_prev - p_curr)
+                    E = p_curr + r * (p_next - p_curr)
 
-            # Draw Straight Line (Connection)
+            # Draw Straight Line Connection
             ax.plot([last_endpoint[0], S[0]], [last_endpoint[1], S[1]], 'k-')
             
             # Calculate Control Point (Inverse Rounding)
             P2n = 2 * p_curr - 0.5 * S - 0.5 * E
             
-            # --- NEW: Draw Control Point P2n and Construction Lines ---
-            ax.scatter(P2n[0], P2n[1], marker="*", color="red", s=100, zorder=4) # The Star
-            ax.text(P2n[0], P2n[1] + 0.3, "P2n", color="red", fontsize=8, ha="center")
-            # Optional: Draw the triangle S -> P2n -> E to see the hull
+            # Draw Control Point & Triangle
+            ax.scatter(P2n[0], P2n[1], marker="*", color="red", s=100, zorder=4)
             ax.plot([S[0], P2n[0], E[0]], [S[1], P2n[1], E[1]], color="red", linestyle=":", linewidth=1, alpha=0.6)
 
             # Draw The Curve
@@ -378,12 +382,11 @@ class CollisionChecker(object):
         goal = positions[-1]
         ax.plot([last_endpoint[0], goal[0]], [last_endpoint[1], goal[1]], 'k-')
         
-        # Draw Goal Node
         ax.scatter(goal[0], goal[1], marker="o", color="lightblue", s=300, zorder=5)
         ax.text(goal[0], goal[1], "G", fontweight="heavy", ha="center", va="center")
 
         return ax
-
+    
     def draw_path_with_parabolas(self, path_positions: list, r: list, ax: plt.Axes = None) -> plt.Axes:
         """Draws a path with parabolas connecting the nodes according to r
         
@@ -440,3 +443,186 @@ class CollisionChecker(object):
                
 def retrieve_path_positions(graph: nx.Graph, node_names: list) -> list:
     return [graph.nodes[name]["pos"] for name in node_names]
+
+def calculate_path_length(planner, path: list, use_curves: bool = True) -> float:
+    """
+    Calculates path length. Supports both Dynamic and Fixed K modes.
+    """
+    def get_pos(name):
+        return np.array(planner.graph.nodes[name]['pos'])
+
+    if not use_curves:
+        length = 0.0
+        for i in range(len(path) - 1):
+            p1 = get_pos(path[i])
+            p2 = get_pos(path[i+1])
+            length += np.linalg.norm(p2 - p1)
+        return length
+
+    total_length = 0.0
+    last_endpoint = get_pos(path[0])
+    
+    for i in range(1, len(path) - 1):
+        node_name = path[i]
+        p_prev = get_pos(path[i-1])
+        p_curr = get_pos(node_name)
+        p_next = get_pos(path[i+1])
+        
+        r = planner.graph.nodes[node_name].get('r', 0.0)
+        fixed_k = planner.graph.nodes[node_name].get('fixed_k')
+
+        if r > 0:
+            # --- GEOMETRY CALCULATION ---
+            if fixed_k is not None:
+                # Fixed K: r is always on prev
+                k = fixed_k
+                S = p_curr + r * (p_prev - p_curr)
+                E = p_curr + (r * k) * (p_next - p_curr)
+            else:
+                # Dynamic K: r is on shorter side
+                dist_prev = np.linalg.norm(p_curr - p_prev)
+                dist_next = np.linalg.norm(p_next - p_curr)
+                prev_is_shorter = dist_prev <= dist_next
+
+                if prev_is_shorter:
+                    k = dist_prev / dist_next if dist_next > 0 else 1.0
+                    S = p_curr + r * (p_prev - p_curr)
+                    E = p_curr + (r * k) * (p_next - p_curr)
+                else:
+                    k = dist_next / dist_prev if dist_prev > 0 else 1.0
+                    S = p_curr + (r * k) * (p_prev - p_curr)
+                    E = p_curr + r * (p_next - p_curr)
+            
+            # 1. Add Straight Segment
+            total_length += np.linalg.norm(S - last_endpoint)
+            
+            # 2. Add Curve Length (Discrete Sum)
+            P2n = 2 * p_curr - 0.5 * S - 0.5 * E
+            steps = 20
+            t_vals = np.linspace(0, 1, steps)
+            curve_points = [(1-t)**2 * S + 2*(1-t)*t * P2n + t**2 * E for t in t_vals]
+            
+            for j in range(len(curve_points)-1):
+                total_length += np.linalg.norm(curve_points[j+1] - curve_points[j])
+            
+            last_endpoint = E
+        else:
+            # No smoothing
+            dist_to_node = np.linalg.norm(p_curr - last_endpoint)
+            total_length += dist_to_node
+            last_endpoint = p_curr
+
+    # Final Segment
+    goal = get_pos(path[-1])
+    total_length += np.linalg.norm(goal - last_endpoint)
+    
+    return total_length
+
+def plot_performance_data(stats, len_original, len_optimized):
+    """
+    Plots performance metrics (Counts, Time, Path Length) on a multi-axis chart.
+    
+    Args:
+        stats (dict): Dictionary containing count and time for collision checks.
+                      e.g. {'pointInCollision': {'count': 100, 'time': 0.5}, ...}
+        len_original (float): Length of the original straight path.
+        len_optimized (float): Length of the optimized flyby path.
+    """
+    
+    # Create Figure
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+    plt.title(f"Performance Metrics")
+
+    # X-Axis Setup
+    categories = ['Point Checks', 'Curve Checks', 'Path Length']
+    x_pos = np.arange(len(categories))
+    width = 0.25  # Bar width
+
+    # --- Axis 1: Counts (Left Y-Axis) ---
+    color1 = 'tab:blue'
+    ax1.set_ylabel('Number of Calls', color=color1, fontweight='bold')
+    
+    # Extract counts (default to 0 if key missing)
+    pt_count = stats.get('pointInCollision', {}).get('count', 0)
+    crv_count = stats.get('curveInCollision', {}).get('count', 0)
+    
+    counts = [pt_count, crv_count, 0]
+    bars1 = ax1.bar(x_pos - width, counts, width, label='Count', color=color1, alpha=0.7)
+    ax1.tick_params(axis='y', labelcolor=color1)
+    
+    # Label Counts
+    for rect in bars1:
+        height = rect.get_height()
+        if height > 0:
+            ax1.text(rect.get_x() + rect.get_width()/2., height,
+                    f'{int(height)}', ha='center', va='bottom', color=color1)
+
+    # --- Axis 2: Time (Right Y-Axis 1) ---
+    ax2 = ax1.twinx() 
+    color2 = 'tab:orange'
+    ax2.set_ylabel('Time (seconds)', color=color2, fontweight='bold')
+    
+    pt_time = stats.get('pointInCollision', {}).get('time', 0.0)
+    crv_time = stats.get('curveInCollision', {}).get('time', 0.0)
+    
+    times = [pt_time, crv_time, 0]
+    bars2 = ax2.bar(x_pos, times, width, label='Time', color=color2, alpha=0.7)
+    ax2.tick_params(axis='y', labelcolor=color2)
+    
+    # Label Times
+    for rect in bars2:
+        height = rect.get_height()
+        if height > 0:
+            ax2.text(rect.get_x() + rect.get_width()/2., height,
+                    f'{height:.4f}s', ha='center', va='bottom', color=color2, fontsize=9)
+
+    # --- Axis 3: Length (Right Y-Axis 2 - Offset) ---
+    ax3 = ax1.twinx()
+    ax3.spines["right"].set_position(("axes", 1.15)) # Offset spine outward
+    color3 = 'tab:purple'
+    ax3.set_ylabel('Path Length (m)', color=color3, fontweight='bold')
+    
+    # Visual trick: Draw two bars at the 3rd x-position for comparison
+    bars3_orig = ax3.bar(x_pos[2] - width/2, len_original, width/2, color='gray', label='Original Len')
+    bars3_opt  = ax3.bar(x_pos[2] + width/2, len_optimized, width/2, color=color3, label='Optimized Len')
+    
+    ax3.tick_params(axis='y', labelcolor=color3)
+    
+    # Label Lengths
+    ax3.text(x_pos[2] - width/2, len_original, f'{len_original:.1f}m', ha='center', va='bottom', color='black', fontsize=9)
+    ax3.text(x_pos[2] + width/2, len_optimized, f'{len_optimized:.1f}m', ha='center', va='bottom', color=color3, fontsize=9, fontweight='bold')
+
+    # Formatting
+    ax1.set_xticks(x_pos)
+    ax1.set_xticklabels(categories)
+    ax1.grid(True, axis='y', alpha=0.3)
+    
+    # Calculate and display percentage change text
+    if len_original > 0:
+        diff_percent = ((len_optimized - len_original) / len_original) * 100
+        ax3.text(x_pos[2], max(len_original, len_optimized) * 1.05, 
+                 f"Change: {diff_percent:+.2f}%", ha='center', color='black', fontweight='bold')
+
+    # Legend
+    fig.legend([bars1, bars2, bars3_orig, bars3_opt], 
+               ["Count", "Time (s)", "Orig. Length", "Opt. Length"], 
+               loc="upper right", bbox_to_anchor=(0.9, 0.88))
+
+    plt.tight_layout()
+    plt.show()
+
+def clear_graph_attributes(planner):
+    """
+    Removes 'r' and 'fixed_k' attributes from all nodes in the planner's graph.
+    This ensures subsequent optimization runs start with a clean state.
+    """
+    graph = planner.graph
+    
+    # Iterate over all nodes in the graph
+    for node_name in graph.nodes:
+        # Access the mutable attribute dictionary for the node
+        node_attrs = graph.nodes[node_name]
+        
+        # Safely remove attributes if they exist using pop(key, default)
+        node_attrs.pop('r', None)
+        node_attrs.pop('fixed_k', None)
