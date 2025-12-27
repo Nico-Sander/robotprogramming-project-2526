@@ -131,7 +131,7 @@ def construct_benchmark_environments():
     # Environment 3
     env_3 = dict()
     env_3["obs_1"] = Polygon([(6.0, 17.0), (7.0, 15.0), (20.0, 18.0), (20.0, 20.0)])
-    env_3["obs_2"] = Polygon([(0.0, 11.0), (0.0, 13.0), (6.0, 13.0), (6.0, 11.0)])
+    env_3["obs_2"] = Polygon([(0.0, 10.2), (0.0, 13.0), (6.0, 13.0), (6.0, 10.2)])
     env_3["obs_3"] = fillet_corner_if_exists(
         Polygon([(3.0, 7.0), (3.0, 9.0), (8.0, 9.0), (8.0, 7.0)]),
         (3.0, 7.0),
@@ -159,7 +159,7 @@ def construct_benchmark_environments():
         4.5
     )
     env_4["obs_2"] = fillet_corner_if_exists(
-        Polygon([(0, 12.0), (8, 16.0), (7.5, 12), (14, 11.0), (20.0, 0), (20, 20), (0, 20)]),
+        Polygon([(0, 12.0), (8, 16.0), (6.5, 11.5), (14, 11.0), (20.0, 0), (20, 20), (0, 20)]),
         (8.0, 16.0),
         1
     )
@@ -320,7 +320,7 @@ class CollisionChecker(object):
             
             # Draw the original waypoint lightly
             ax.scatter(p_curr[0], p_curr[1], marker="x", color="gray", alpha=0.5)
-            ax.text(p_curr[0], p_curr[1] + 0.5, f"r={r}", color="blue", fontsize=8, ha="center")
+            ax.text(p_curr[0], p_curr[1] + 0.5, f"r={round(r, 2)}", color="blue", fontsize=8, ha="center")
 
             # --- CASE A: No Smoothing (r=0) ---
             if r == 0:
