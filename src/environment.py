@@ -266,7 +266,7 @@ class CollisionChecker(object):
         # 2. Draw Original Path (Grey dashed)
         orig_x = [p[0] for p in positions]
         orig_y = [p[1] for p in positions]
-        ax.plot(orig_x, orig_y, "gray", linestyle="--", label="Original")
+        ax.plot(orig_x, orig_y, "lightgray", linestyle="--", label="Original")
         
         # 3. Retrieve Control Points (P2n) from Graph
         p2n_list = []
@@ -292,13 +292,16 @@ class CollisionChecker(object):
             P_prev = p2n_list[i-1]
             P_curr = p2n_list[i]
             P_next = p2n_list[i+1]
-            r = planner.graph.nodes[node_names[i]].get('r', 0)
-            fixed_k = planner.graph.nodes[node_names[i]].get('fixed_k')
+            
+            node_name = node_names[i]
+            r = planner.graph.nodes[node_name].get('r', 0)
+            fixed_k = planner.graph.nodes[node_name].get('fixed_k')
 
-            # --- Recalculate S and E (Same logic as in optimizer) ---
+            # --- Recalculate S and E ---
             d_in = np.linalg.norm(P_curr - P_prev)
             d_out = np.linalg.norm(P_next - P_curr)
             
+            # Use specific k if set, otherwise Dynamic/Symmetric logic
             if fixed_k is not None:
                 li, lo = r, r * fixed_k
             else:
@@ -320,8 +323,11 @@ class CollisionChecker(object):
             
             # Control Point (P2n)
             ax.scatter(P_curr[0], P_curr[1], marker="*", color="red", s=100, zorder=4)
-            # R-value text
-            ax.text(positions[i][0], positions[i][1], f"r={r:.2f}", color="blue", fontsize=8, ha="center")
+            
+            # Label with r and k
+            k_label = f"k={fixed_k:.2f}" if fixed_k is not None else "k=Dyn"
+            label_text = f"r={r:.2f}\n{k_label}"
+            ax.text(positions[i][0], positions[i][1], label_text, color="blue", fontsize=8, ha="center")
             
             # Straight Connection (From previous E to current S)
             ax.plot([last_endpoint[0], S[0]], [last_endpoint[1], S[1]], 'k-')
@@ -559,3 +565,69 @@ def clear_graph_attributes(planner):
         node_attrs.pop('r', None)
         node_attrs.pop('fixed_k', None)
         node_attrs.pop('P2n', None)
+
+
+def analyze_optimal_k(optimizer, planner, node_names, r_fixed=0.5):
+    """
+    Performs a parameter sweep to find the optimal global 'k' that minimizes 
+    total path length for a given r_init.
+    
+    Args:
+        optimizer: Instance of OptimizeFlyby
+        planner: The planner instance
+        node_names: List of nodes in the path
+        r_fixed: The 'r_init' value to use for all runs (the "given r").
+        
+    Returns:
+        best_k (float): The k value that resulted in the shortest path.
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    
+    # 1. Define range of k to test
+    # We test from 0.1 (sharp skew) to 3.0 (opposite skew)
+    k_values = np.linspace(0.1, 3.0, 30)
+    
+    lengths = []
+    
+    print(f"--- Starting K-Sweep for r_init={r_fixed} ---")
+    
+    for k in k_values:
+        # 2. Reset Planner State (Crucial!)
+        # We must clear old attributes so the optimizer starts fresh
+        clear_graph_attributes(planner)
+        
+        # 3. Configure and Run Optimizer
+        # We allow the optimizer to shrink r if this specific k causes a collision
+        config = {'r_init': r_fixed, 'k': k}
+        optimizer.optimizePath(node_names, planner, config)
+        
+        # 4. Calculate Resulting Length
+        # use_curves=True ensures we measure the actual G1 path length
+        length = calculate_path_length(planner, node_names, use_curves=True)
+        lengths.append(length)
+
+    # 5. Find the Minimum
+    min_length = min(lengths)
+    min_idx = lengths.index(min_length)
+    best_k = k_values[min_idx]
+    
+    print(f"--- Result ---")
+    print(f"Optimal Global k: {best_k:.2f}")
+    print(f"Minimum Length:   {min_length:.4f}m")
+    
+    # 6. Visualization of the Sweep
+    plt.figure(figsize=(10, 6))
+    plt.plot(k_values, lengths, 'b-o', label='Path Length')
+    
+    # Highlight the optimum
+    plt.plot(best_k, min_length, 'r*', markersize=15, label=f'Optimum (k={best_k:.2f})')
+    
+    plt.title(f'Optimization of k (for r_init={r_fixed})')
+    plt.xlabel('Asymmetry Factor k')
+    plt.ylabel('Total Path Length [m]')
+    plt.grid(True)
+    plt.legend()
+    plt.show()
+    
+    return best_k
