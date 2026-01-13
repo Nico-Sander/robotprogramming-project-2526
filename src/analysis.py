@@ -1,6 +1,70 @@
 import networkx as nx
 import numpy as np
 import matplotlib.pyplot as plt
+import ipywidgets as widgets
+from IPython.display import display
+
+def create_interactive_viewer(data_dict, draw_callback):
+    """
+    Generates an interactive dropdown viewer for any set of environments.
+    
+    Args:
+        data_dict (dict): Dictionary containing the environment data.
+        draw_callback (func): Function with signature (name, item) that handles 
+                              the actual matplotlib plotting.
+    """
+    plot_cache = {}
+    
+    # 1. Loading Indicator
+    progress = widgets.Label(value="Pre-rendering plots... (0/{})".format(len(data_dict)))
+    display(progress)
+    
+    # 2. Pre-render loop
+    count = 0
+    for name, item in data_dict.items():
+        out = widgets.Output()
+        with out:
+            # Execute the user-defined drawing logic
+            draw_callback(name, item)
+            plt.show() # Ensure the plot is flushed to the widget
+        plot_cache[name] = out
+        
+        count += 1
+        progress.value = f"Pre-rendering plots... ({count}/{len(data_dict)})"
+
+    # 3. Clean up loading bar
+    progress.layout.display = 'none'
+
+    # 4. Setup Widget Controls
+    dropdown = widgets.Dropdown(
+        options=list(data_dict.keys()),
+        value=list(data_dict.keys())[0],
+        description='Select Env:',
+    )
+
+    plot_container = widgets.VBox([plot_cache[dropdown.value]])
+
+    def on_change(change):
+        if change['type'] == 'change' and change['name'] == 'value':
+            plot_container.children = [plot_cache[change['new']]]
+
+    dropdown.observe(on_change)
+    display(dropdown, plot_container)
+
+def render_initial_path(name, item):
+    """
+    Callback to render the initial jagged path.
+    """
+    planner = item["planner"]
+    # Draw Obstacles
+    ax = planner._collisionChecker.draw_enviroments()
+    
+    # Draw Path
+    # We use the existing helper in this file to get coords
+    path_pos = retrieve_path_positions(planner.graph, item['solution_node_names'])
+    planner._collisionChecker.draw_path(path_pos, ax=ax)
+    
+    plt.title(f"Environment {name} - Initial Path")
 
 def retrieve_path_positions(graph: nx.Graph, node_names: list) -> list:
     """ Retrieves coordinate tuples for a list of node names. """
