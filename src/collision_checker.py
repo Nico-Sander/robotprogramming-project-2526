@@ -81,18 +81,28 @@ class CollisionChecker(object):
     
     # --- VISUALIZATION METHODS ---
 
-    def create_axes(self, figsize: tuple = (10,10)) -> plt.Axes:
-        _, ax = plt.subplots(figsize=figsize)
+    def _setup_axis(self, ax: plt.Axes):
+        """ 
+        Applies standard styling (limits, grid, ticks) to any given axis.
+        This ensures subplots look the same as standalone figures.
+        """
         ax.set_xlim(self.limits[0][0], self.limits[0][1])
         ax.set_ylim(self.limits[1][0], self.limits[1][1])
-        ax.set_xticks(range(0, int(self.limits[0][1])))
-        ax.set_yticks(range(0, int(self.limits[1][1])))
-        ax.grid()
+        ax.set_xticks(range(0, int(self.limits[0][1])+1))
+        ax.set_yticks(range(0, int(self.limits[1][1])+1))
+        ax.grid(True, which='both', linestyle='--', alpha=0.5, zorder=0)
+
+    def create_axes(self, figsize: tuple = (10,10)) -> plt.Axes:
+        _, ax = plt.subplots(figsize=figsize)
+        self._setup_axis(ax)
         return ax
 
     def draw_enviroments(self, ax: plt.Axes = None) -> plt.Axes:
         if not ax:
             ax = self.create_axes()
+        else:
+            self._setup_axis(ax)
+
         for key, value in self.scene.items():
             plotting.plot_polygon(value, add_points=False, color='red', ax=ax)
         return ax
@@ -101,6 +111,8 @@ class CollisionChecker(object):
         """ Draws a simple straight-line path. """
         if not ax:
             ax = self.create_axes()
+        else:
+            self._setup_axis(ax)
         
         x_val, y_val = zip(*path_positions)
         ax.plot(x_val, y_val, color="k")
@@ -119,13 +131,12 @@ class CollisionChecker(object):
     def draw_optimized_path(self, optimized_results, planner, ax=None):
         """
         Visualizes the optimized G1-smooth path.
-        
-        Fetches the Control Points (P2n) directly from the planner graph
-        and recalculates the curve start (S) and end (E) points on the fly
-        to draw the Bezier curves and connection lines.
         """
         if not ax:
             ax = self.create_axes()
+        else:
+            # Apply standard styling to the passed subplot
+            self._setup_axis(ax)
 
         # 1. Setup Data
         node_names = [x[0] for x in optimized_results]
@@ -135,28 +146,26 @@ class CollisionChecker(object):
         # 2. Draw Original Path (Grey dashed)
         orig_x = [p[0] for p in positions]
         orig_y = [p[1] for p in positions]
-        ax.plot(orig_x, orig_y, "lightgray", linestyle="--", label="Original")
+        ax.plot(orig_x, orig_y, "lightgray", linestyle="--", label="Original", zorder=1)
         
         # 3. Retrieve Control Points (P2n) from Graph
         p2n_list = []
         for name in node_names:
-            # Fallback to node position if P2n missing (e.g. for Start/End)
             p2n_list.append(planner.graph.nodes[name].get('P2n', planner.graph.nodes[name]['pos']))
         
-        # Draw the "New Straight Path" (The Control Polygon / Hull)
-        # This is the dashed black line connecting the P2n points
+        # Draw the "New Straight Path" (Control Polygon)
         p2n_x = [p[0] for p in p2n_list]
         p2n_y = [p[1] for p in p2n_list]
-        ax.plot(p2n_x, p2n_y, "k--", alpha=0.8, label="New Straight Path")
+        ax.plot(p2n_x, p2n_y, "k--", alpha=0.8, label="New Straight Path", zorder=2)
 
         # 4. Draw Curves and Segments
         last_endpoint = positions[0] 
         
         # Draw Start Node
         ax.scatter(positions[0][0], positions[0][1], marker="o", color="lightgreen", s=300, zorder=5)
-        ax.text(positions[0][0], positions[0][1], "S", fontweight="heavy", ha="center", va="center")
+        ax.text(positions[0][0], positions[0][1], "S", fontweight="heavy", ha="center", va="center", zorder=6)
 
-        # Iterate through intermediate nodes to draw curves
+        # Iterate through intermediate nodes
         for i in range(1, len(positions)-1):
             P_prev = p2n_list[i-1]
             P_curr = p2n_list[i]
@@ -170,7 +179,6 @@ class CollisionChecker(object):
             d_in = np.linalg.norm(P_curr - P_prev)
             d_out = np.linalg.norm(P_next - P_curr)
             
-            # Use specific k if set, otherwise Dynamic/Symmetric logic
             if fixed_k is not None:
                 li, lo = r, r * fixed_k
             else:
@@ -188,18 +196,13 @@ class CollisionChecker(object):
             S = P_curr + li * vec_in
             E = P_curr + lo * vec_out
 
-            # --- Drawing ---
+            # --- DRAWING ---
             
-            # Control Point (P2n)
+            # Control Point (Star)
             ax.scatter(P_curr[0], P_curr[1], marker="*", color="red", s=100, zorder=4)
             
-            # Label with r and k
-            k_label = f"k={fixed_k:.2f}" if fixed_k is not None else "k=Dyn"
-            label_text = f"r={r:.2f}\n{k_label}"
-            ax.text(positions[i][0], positions[i][1], label_text, color="blue", fontsize=8, ha="center")
-            
             # Straight Connection (From previous E to current S)
-            ax.plot([last_endpoint[0], S[0]], [last_endpoint[1], S[1]], 'k-')
+            ax.plot([last_endpoint[0], S[0]], [last_endpoint[1], S[1]], 'k-', zorder=3)
             
             if r > 0:
                 # Draw Bezier Curve (S -> P2n -> E)
@@ -208,18 +211,47 @@ class CollisionChecker(object):
                 
                 cx = [p[0] for p in curve_pts]
                 cy = [p[1] for p in curve_pts]
-                ax.plot(cx, cy, 'b-', linewidth=2)
-                
+                ax.plot(cx, cy, 'b-', linewidth=2, zorder=3)
                 last_endpoint = E
             else:
-                # No curve, just connect to the Control Point
                 last_endpoint = P_curr
 
+            # --- LABELING (OUTSIDE CORNER) ---
+            v1 = P_prev - P_curr
+            v2 = P_next - P_curr
+            n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
+            if n1 > 0: v1 /= n1
+            if n2 > 0: v2 /= n2
+            
+            # Direction pointing OUTWARD
+            bisector = -(v1 + v2) 
+            bnorm = np.linalg.norm(bisector)
+            
+            # --- CHANGE: Increased distance from 0.7 to 1.5 ---
+            offset_dist = 1.5
+            
+            if bnorm < 0.01:
+                offset = np.array([0, offset_dist])
+            else:
+                offset = (bisector / bnorm) * offset_dist
+                
+            text_pos = P_curr + offset
+
+            # Format & Draw
+            k_label = f"k={fixed_k:.2f}" if fixed_k is not None else "k=Sym"
+            label_text = f"r={r:.2f}\n{k_label}"
+            
+            ax.text(text_pos[0], text_pos[1], label_text, 
+                    color="darkblue", fontsize=8, 
+                    ha="center", va="center",
+                    zorder=10, 
+                    bbox=dict(facecolor='white', alpha=0.85, edgecolor='lightgray', boxstyle='round,pad=0.2'))
+
         # Final Segment to Goal
-        ax.plot([last_endpoint[0], positions[-1][0]], [last_endpoint[1], positions[-1][1]], 'k-')
+        ax.plot([last_endpoint[0], positions[-1][0]], [last_endpoint[1], positions[-1][1]], 'k-', zorder=3)
         
         # Draw Goal Node
         ax.scatter(positions[-1][0], positions[-1][1], marker="o", color="lightblue", s=300, zorder=5)
-        ax.text(positions[-1][0], positions[-1][1], "G", fontweight="heavy", ha="center", va="center")
+        ax.text(positions[-1][0], positions[-1][1], "G", fontweight="heavy", ha="center", va="center", zorder=6)
 
         return ax

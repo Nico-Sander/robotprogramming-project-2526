@@ -3,53 +3,87 @@ import numpy as np
 import matplotlib.pyplot as plt
 import ipywidgets as widgets
 from IPython.display import display
+import itertools
 
-def create_interactive_viewer(data_dict, draw_callback):
+from planners.IPPerfMonitor import IPPerfMonitor
+
+
+def create_interactive_viewer(param_config: dict, render_callback):
     """
-    Generates an interactive dropdown viewer for any set of environments.
+    A generic interactive viewer that:
+    1. Generates combinations of all parameters in param_config.
+    2. Runs render_callback(**params) for each combination (pre-calculation).
+    3. Creates widgets (Dropdowns/Sliders) automatically based on inputs.
     
     Args:
-        data_dict (dict): Dictionary containing the environment data.
-        draw_callback (func): Function with signature (name, item) that handles 
-                              the actual matplotlib plotting.
+        param_config (dict): {'ParamName': [list_of_values], ...}
+        render_callback (func): Function accepting kwargs matching param_config keys.
     """
-    plot_cache = {}
+    # 1. Prepare combinations
+    param_names = list(param_config.keys())
+    param_values = list(param_config.values())
+    combinations = list(itertools.product(*param_values))
     
-    # 1. Loading Indicator
-    progress = widgets.Label(value="Pre-rendering plots... (0/{})".format(len(data_dict)))
-    display(progress)
+    cache = {}
     
-    # 2. Pre-render loop
-    count = 0
-    for name, item in data_dict.items():
+    # 2. Setup Progress Bar
+    progress = widgets.IntProgress(min=0, max=len(combinations), description='Pre-calc:', style={'bar_color': 'maroon'})
+    label = widgets.Label(value="Initializing...")
+    display(widgets.VBox([label, progress]))
+    
+    # 3. Pre-calculation Loop
+    for combo in combinations:
+        # Create a dictionary for the current state, e.g., {'Env': '1', 'Radius': 0.2}
+        current_params = dict(zip(param_names, combo))
+        
+        # Update Label
+        param_str = ", ".join([f"{k}={v}" for k, v in current_params.items()])
+        label.value = f"Processing: {param_str}"
+        
+        # Capture Output
         out = widgets.Output()
         with out:
-            # Execute the user-defined drawing logic
-            draw_callback(name, item)
-            plt.show() # Ensure the plot is flushed to the widget
-        plot_cache[name] = out
+            render_callback(**current_params)
         
-        count += 1
-        progress.value = f"Pre-rendering plots... ({count}/{len(data_dict)})"
+        # Store in cache using the tuple of values as key
+        cache[combo] = out
+        progress.value += 1
 
-    # 3. Clean up loading bar
+    # 4. Hide Progress
     progress.layout.display = 'none'
+    label.layout.display = 'none'
 
-    # 4. Setup Widget Controls
-    dropdown = widgets.Dropdown(
-        options=list(data_dict.keys()),
-        value=list(data_dict.keys())[0],
-        description='Select Env:',
-    )
-
-    plot_container = widgets.VBox([plot_cache[dropdown.value]])
-
+    # 5. Generate Controls dynamically
+    controls = []
+    
+    for name, values in param_config.items():
+        # Heuristic: Use Slider for numbers with many options, Dropdown otherwise
+        if len(values) > 5 and isinstance(values[0], (int, float)):
+             widget = widgets.SelectionSlider(options=values, description=f'{name}:', continuous_update=False)
+        else:
+             widget = widgets.Dropdown(options=values, description=f'{name}:')
+        controls.append(widget)
+    
+    # 6. Interaction Logic
+    # Initial view
+    initial_combo = tuple(c.value for c in controls)
+    view_container = widgets.VBox([cache.get(initial_combo, widgets.Output())])
+    
     def on_change(change):
-        if change['type'] == 'change' and change['name'] == 'value':
-            plot_container.children = [plot_cache[change['new']]]
+        # Get current values from all controls
+        new_combo = tuple(c.value for c in controls)
+        # Swap view
+        if new_combo in cache:
+            view_container.children = [cache[new_combo]]
+            
+    # Link all controls
+    for w in controls:
+        w.observe(on_change, names='value')
 
-    dropdown.observe(on_change)
-    display(dropdown, plot_container)
+    # 7. Display Layout
+    # Group controls horizontally, then stack plot below
+    control_box = widgets.HBox(controls)
+    display(control_box, view_container)
 
 def render_initial_path(name, item):
     """
@@ -65,6 +99,145 @@ def render_initial_path(name, item):
     planner._collisionChecker.draw_path(path_pos, ax=ax)
     
     plt.title(f"Environment {name} - Initial Path")
+
+def interactive_radius_exploration(env_dict, optimizer):
+    """
+    Performs a full sweep of radius values, caches the GRAPH STATE,
+    and launches a dashboard viewer.
+    """
+    r_steps = np.linspace(0.05, 0.5, 10)
+    r_values = sorted(list(set([0.02] + list(np.round(r_steps, 2)))))
+    env_keys = list(env_dict.keys())
+
+    # 1. Pre-calculation
+    results_cache = {}
+    summary_data = {name: {'r': [], 'len': []} for name in env_keys}
+    
+    total_calcs = len(env_keys) * len(r_values)
+    progress = widgets.IntProgress(min=0, max=total_calcs, description='Pre-calc:', style={'bar_color': 'maroon'})
+    label = widgets.Label(value="Initializing...")
+    display(widgets.VBox([label, progress]))
+
+    for name in env_keys:
+        item = env_dict[name]
+        planner = item['planner']
+        node_names = item['solution_node_names']
+        
+        for r in r_values:
+            # A. Run Optimization
+            IPPerfMonitor.clearData()
+            clear_graph_attributes(planner)
+            
+            config = {'r_init': r}
+            optimized_path = optimizer.optimizePath(node_names, planner, config)
+            
+            # Save the calculated P2n and r values because the planner 
+            # object is mutable and will be overwritten in the next loop.
+            graph_state = {}
+            for node in node_names:
+                node_data = planner.graph.nodes[node]
+                graph_state[node] = {
+                    'r': node_data.get('r'),
+                    'P2n': node_data.get('P2n'),      # Important: Position of control point
+                    'fixed_k': node_data.get('fixed_k')
+                }
+            # -----------------------------------------
+
+            # B. Capture Metrics
+            stats, len_orig, len_opt = capture_performance_metrics(planner, node_names)
+            
+            # C. Store Data
+            results_cache[(name, r)] = {
+                'path': optimized_path,
+                'graph_state': graph_state, # <--- Store the state
+                'stats': stats,
+                'len_orig': len_orig,
+                'len_opt': len_opt
+            }
+            
+            summary_data[name]['r'].append(r)
+            summary_data[name]['len'].append(len_opt)
+            progress.value += 1
+
+    progress.layout.display = 'none'
+    label.layout.display = 'none'
+
+    # 2. Render Function
+    def render_dashboard(Env, Radius):
+        res = results_cache[(Env, Radius)]
+        item = env_dict[Env]
+        planner = item['planner']
+        
+        # --- CRITICAL FIX: RESTORE GRAPH STATE ---
+        # Before drawing, force the planner graph to match the stored state for this Radius
+        for node, attrs in res['graph_state'].items():
+            planner.graph.nodes[node].update(attrs)
+        # -----------------------------------------
+        
+        fig = plt.figure(figsize=(14, 6))
+        gs = fig.add_gridspec(1, 2)
+        
+        # Plot 1: Map
+        ax_map = fig.add_subplot(gs[0, 0])
+        planner._collisionChecker.draw_enviroments(ax=ax_map)
+        planner._collisionChecker.draw_optimized_path(res['path'], planner, ax=ax_map)
+        ax_map.set_title(f"Environment {Env} | r={Radius}")
+
+        # Plot 2: Summary
+        ax_sum = fig.add_subplot(gs[0, 1])
+        r_data = summary_data[Env]['r']
+        l_data = summary_data[Env]['len']
+        
+        ax_sum.plot(r_data, l_data, 'b-o', label='Path Length')
+        ax_sum.plot(Radius, res['len_opt'], 'r*', markersize=15, label='Current')
+        ax_sum.set_xlabel('Smoothing Radius (r)')
+        ax_sum.set_ylabel('Length [m]')
+        ax_sum.set_title('Radius Impact Analysis')
+        ax_sum.grid(True, alpha=0.3)
+        ax_sum.legend()
+        
+        plt.tight_layout()
+        plt.show()
+        
+        plot_performance_data(res['stats'], res['len_orig'], res['len_opt'])
+
+    # 3. Launch
+    config = {
+        'Env': env_keys,
+        'Radius': r_values
+    }
+    create_interactive_viewer(config, render_dashboard)
+
+
+
+def capture_performance_metrics(planner, node_names):
+    """
+    Extracts collision check statistics from IPPerfMonitor and 
+    calculates both original and optimized path lengths.
+    
+    Returns:
+        tuple: (stats_dict, length_original, length_optimized)
+    """
+    # 1. Extract Performance Stats
+    df = IPPerfMonitor.dataFrame()
+    stats = {}
+    target_funcs = ['lineInCollision', 'curveInCollision', 'pointInCollision']
+    
+    for f in target_funcs:
+        f_data = df[df['name'] == f]
+        if not f_data.empty:
+            stats[f] = {
+                'count': len(f_data), 
+                'time': f_data['time'].sum()
+            }
+        else:
+            stats[f] = {'count': 0, 'time': 0.0}
+
+    # 2. Calculate Path Lengths
+    len_orig = calculate_path_length(planner, node_names, use_curves=False)
+    len_opt = calculate_path_length(planner, node_names, use_curves=True)
+
+    return stats, len_orig, len_opt
 
 def retrieve_path_positions(graph: nx.Graph, node_names: list) -> list:
     """ Retrieves coordinate tuples for a list of node names. """
