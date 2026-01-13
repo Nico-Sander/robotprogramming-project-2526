@@ -326,7 +326,7 @@ def interactive_k_exploration(env_dict, optimizer, r_fixed=0.5):
     
     create_interactive_viewer(config, render_dashboard)
 
-def find_optimal_k_interactive(env_dict, optimizer):
+def find_optimal_global_k_interactive(env_dict, optimizer):
     """
     Runs the automatic k-optimization for all environments using the 
     optimizer's native analyze method, then displays a full dashboard.
@@ -430,6 +430,148 @@ def find_optimal_k_interactive(env_dict, optimizer):
     dropdown = widgets.Dropdown(options=env_keys, value=env_keys[0], description='Select Env:')
     
     # Simple interaction container
+    container = widgets.VBox([widgets.Output()])
+    
+    def on_change(change):
+        if change['type'] == 'change' and change['name'] == 'value':
+            out = widgets.Output()
+            with out:
+                render_dashboard(change['new'])
+            container.children = [out]
+            
+    # Initial Render
+    with container.children[0]:
+        render_dashboard(dropdown.value)
+        
+    dropdown.observe(on_change, names='value')
+    display(dropdown, container)
+    
+def interactive_individual_optimization(env_dict, optimizer):
+    """
+    Runs 'Individual Corner Optimization' for all environments.
+    Compares the result against the 'Best Global K' baseline.
+    """
+    env_keys = list(env_dict.keys())
+    cache = {}
+    
+    # 1. Progress Bar
+    progress = widgets.IntProgress(min=0, max=len(env_keys), description='Optimizing:', style={'bar_color': 'orange'})
+    label = widgets.Label(value="Running Coordinate Descent (Individual k)...")
+    display(widgets.VBox([label, progress]))
+
+    for name in env_keys:
+        item = env_dict[name]
+        planner = item['planner']
+        node_names = item['solution_node_names']
+        
+        # --- A. Baseline: Best Global K ---
+        # Find the best single k for comparison
+        global_res = optimizer.analyze_optimal_k(planner, node_names, r_fixed=0.5, plot=False)
+        len_global = global_res['min_length']
+        best_global_k = global_res['best_k']
+        
+        # --- B. Individual Optimization ---
+        # 1. Clear previous state
+        clear_graph_attributes(planner)
+        
+        # 2. Run the Coordinate Descent
+        # FIX: Pass parameters inside a 'config' dictionary, not as kwargs
+        optimizer.optimize_individual_corners(node_names, planner, config={'r_init': 0.5})
+        
+        # 3. Capture the Result
+        # Run optimizePath one last time to ensure we get the final geometry 
+        # based on the fixed_k values now stored in the graph.
+        config = {'r_init': 0.5, 'k': None, 'r_decay': 0.8}
+        final_path_individual = optimizer.optimizePath(node_names, planner, config)
+        
+        len_individual = calculate_path_length(planner, node_names, use_curves=True)
+        
+        # 4. Capture Graph State
+        graph_state = {}
+        for node in node_names:
+            node_data = planner.graph.nodes[node]
+            graph_state[node] = {
+                'r': node_data.get('r'),
+                'P2n': node_data.get('P2n'),
+                'fixed_k': node_data.get('fixed_k')
+            }
+            
+        # 5. Metrics
+        stats, len_orig, _ = capture_performance_metrics(planner, node_names)
+
+        cache[name] = {
+            'len_global': len_global,
+            'best_global_k': best_global_k,
+            'len_individual': len_individual,
+            'path': final_path_individual,
+            'graph_state': graph_state,
+            'stats': stats,
+            'len_orig': len_orig
+        }
+        progress.value += 1
+
+    progress.layout.display = 'none'
+    label.layout.display = 'none'
+
+    # 2. Define Dashboard Renderer
+    def render_dashboard(Env):
+        data = cache[Env]
+        item = env_dict[Env]
+        planner = item['planner']
+        
+        # Restore Graph State
+        for node, attrs in data['graph_state'].items():
+            planner.graph.nodes[node].update(attrs)
+            
+        fig = plt.figure(figsize=(14, 6))
+        gs = fig.add_gridspec(1, 2)
+        
+        # Plot 1: The Final Map
+        ax_map = fig.add_subplot(gs[0, 0])
+        planner._collisionChecker.draw_enviroments(ax=ax_map)
+        planner._collisionChecker.draw_optimized_path(data['path'], planner, ax=ax_map)
+        ax_map.set_title(f"Env {Env} | Individual Optimization")
+
+        # Plot 2: Improvement Comparison
+        ax_chart = fig.add_subplot(gs[0, 1])
+        
+        labels = ['Best Global k\n(k={:.2f})'.format(data['best_global_k']), 'Individual k\n(Mixed)']
+        values = [data['len_global'], data['len_individual']]
+        colors = ['gray', 'green']
+        
+        bars = ax_chart.bar(labels, values, color=colors, alpha=0.7, width=0.5)
+        ax_chart.set_ylabel('Total Path Length [m]')
+        ax_chart.set_title(f"Optimization Results")
+        
+        # Dynamic Y-Limit
+        min_val = min(values)
+        max_val = max(values)
+        margin = (max_val - min_val) * 2 if max_val != min_val else 1.0
+        ax_chart.set_ylim(min_val - margin*0.1, max_val + margin*0.1)
+        
+        # Add labels
+        for bar in bars:
+            height = bar.get_height()
+            ax_chart.text(bar.get_x() + bar.get_width()/2., height,
+                    f'{height:.4f} m',
+                    ha='center', va='bottom', fontsize=10, fontweight='bold')
+            
+        # Add Savings Annotation
+        savings = data['len_global'] - data['len_individual']
+        if savings > 0.0001:
+            ax_chart.text(0.5, (min_val + max_val)/2, 
+                         f" Improvement:\n-{savings:.4f} m", 
+                         ha='center', va='center', fontsize=12, color='green', 
+                         bbox=dict(facecolor='white', alpha=0.8, edgecolor='green'))
+
+        plt.tight_layout()
+        plt.show()
+        
+        # Performance Stats
+        plot_performance_data(data['stats'], data['len_orig'], data['len_individual'])
+
+    # 3. Create Viewer
+    dropdown = widgets.Dropdown(options=env_keys, value=env_keys[0], description='Select Env:')
     container = widgets.VBox([widgets.Output()])
     
     def on_change(change):

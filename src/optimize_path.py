@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from analysis import calculate_path_length, clear_graph_attributes
+from analysis import calculate_path_length, clear_graph_attributes, retrieve_path_positions
 
 class OptimizeFlyby():
     def __init__(self):
@@ -230,8 +230,7 @@ class OptimizeFlyby():
         """
         Optimizes 'k' individually for every node using Coordinate Descent.
         """
-        import numpy as np
-        
+
         # 1. Config
         r_base = config.get('r_init', 0.5)
         # We test a range of skews. 'None' represents the default dynamic/symmetric mode.
