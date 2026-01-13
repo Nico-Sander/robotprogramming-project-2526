@@ -208,7 +208,243 @@ def interactive_radius_exploration(env_dict, optimizer):
     }
     create_interactive_viewer(config, render_dashboard)
 
+def interactive_k_exploration(env_dict, optimizer, r_fixed=0.5):
+    """
+    Performs a sweep of 'k' (asymmetry factor) values with a fixed radius 'r'.
+    Generates a dashboard to analyze the impact of k on path length.
+    """
+    # 1. Define Parameter Ranges
+    # We sweep k from 0.1 (sharp start) to 3.0 (sharp end)
+    k_steps = np.linspace(0.1, 3.0, 15)
+    k_values = sorted(list(np.round(k_steps, 2)))
+    
+    # We define a neutral k=1.0 explicitly to ensure it's in the list
+    if 1.0 not in k_values:
+        k_values.append(1.0)
+        k_values.sort()
 
+    env_keys = list(env_dict.keys())
+
+    # 2. Pre-calculation
+    results_cache = {}
+    summary_data = {name: {'k': [], 'len': []} for name in env_keys}
+    
+    total_calcs = len(env_keys) * len(k_values)
+    progress = widgets.IntProgress(min=0, max=total_calcs, description='Pre-calc:', style={'bar_color': 'purple'})
+    label = widgets.Label(value=f"Initializing k-sweep (r={r_fixed})...")
+    display(widgets.VBox([label, progress]))
+
+    for name in env_keys:
+        item = env_dict[name]
+        planner = item['planner']
+        node_names = item['solution_node_names']
+        
+        for k in k_values:
+            label.value = f"Optimizing {name} with k={k}..."
+            
+            # A. Run Optimization
+            IPPerfMonitor.clearData()
+            clear_graph_attributes(planner)
+            
+            # CONFIG: Fixed r, Dynamic k
+            config = {'r_init': r_fixed, 'k': k}
+            optimized_path = optimizer.optimizePath(node_names, planner, config)
+            
+            # Capture Graph State (Critical for visualization)
+            graph_state = {}
+            for node in node_names:
+                node_data = planner.graph.nodes[node]
+                graph_state[node] = {
+                    'r': node_data.get('r'),
+                    'P2n': node_data.get('P2n'),
+                    'fixed_k': node_data.get('fixed_k')
+                }
+
+            # B. Capture Metrics
+            stats, len_orig, len_opt = capture_performance_metrics(planner, node_names)
+            
+            # C. Store Data
+            results_cache[(name, k)] = {
+                'path': optimized_path,
+                'graph_state': graph_state,
+                'stats': stats,
+                'len_orig': len_orig,
+                'len_opt': len_opt
+            }
+            
+            summary_data[name]['k'].append(k)
+            summary_data[name]['len'].append(len_opt)
+            progress.value += 1
+
+    progress.layout.display = 'none'
+    label.layout.display = 'none'
+
+    # 3. Define the Dashboard Renderer
+    def render_dashboard(Env, K_Factor):
+        res = results_cache[(Env, K_Factor)]
+        item = env_dict[Env]
+        planner = item['planner']
+        
+        # Restore Graph State
+        for node, attrs in res['graph_state'].items():
+            planner.graph.nodes[node].update(attrs)
+        
+        fig = plt.figure(figsize=(14, 6))
+        gs = fig.add_gridspec(1, 2)
+        
+        # Plot 1: Map
+        ax_map = fig.add_subplot(gs[0, 0])
+        planner._collisionChecker.draw_enviroments(ax=ax_map)
+        planner._collisionChecker.draw_optimized_path(res['path'], planner, ax=ax_map)
+        ax_map.set_title(f"Env {Env} | r_init={r_fixed} | k={K_Factor}")
+
+        # Plot 2: K vs Length (The "U" curve)
+        ax_sum = fig.add_subplot(gs[0, 1])
+        k_data = summary_data[Env]['k']
+        l_data = summary_data[Env]['len']
+        
+        ax_sum.plot(k_data, l_data, 'g-o', label='Path Length') # Green for K-plots
+        ax_sum.plot(K_Factor, res['len_opt'], 'r*', markersize=15, label='Current')
+        
+        ax_sum.set_xlabel('Asymmetry Factor (k)')
+        ax_sum.set_ylabel('Total Path Length [m]')
+        ax_sum.set_title(f'Impact of Asymmetry (k) at r={r_fixed}')
+        ax_sum.grid(True, alpha=0.3)
+        ax_sum.legend()
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # Plot 3: Performance
+        plot_performance_data(res['stats'], res['len_orig'], res['len_opt'])
+
+    # 4. Launch Viewer
+    config = {
+        'Env': env_keys,
+        'K_Factor': k_values
+    }
+    
+    create_interactive_viewer(config, render_dashboard)
+
+def find_optimal_k_interactive(env_dict, optimizer):
+    """
+    Runs the automatic k-optimization for all environments using the 
+    optimizer's native analyze method, then displays a full dashboard.
+    """
+    env_keys = list(env_dict.keys())
+    cache = {}
+    
+    # 1. Progress Bar
+    progress = widgets.IntProgress(min=0, max=len(env_keys), description='Optimizing:', style={'bar_color': 'green'})
+    label = widgets.Label(value="Running Global Optimization...")
+    display(widgets.VBox([label, progress]))
+    
+    # 2. Pre-calculation Loop
+    for name in env_keys:
+        item = env_dict[name]
+        planner = item['planner']
+        node_names = item['solution_node_names']
+        
+        # A. Run the Analyzer (Suppress internal plot)
+        # This returns the best k AND the sweep history we need for the curve
+        result = optimizer.analyze_optimal_k(planner, node_names, r_fixed=0.5, plot=False)
+        
+        # B. Get Clean Performance Stats for the Final Run
+        # The analyzer ran the final path, but the monitor has mixed data from the sweep.
+        # We run it ONE last time purely to capture clean stats for the bar chart.
+        IPPerfMonitor.clearData()
+        clear_graph_attributes(planner)
+        config = {'r_init': 0.5, 'k': result['best_k']}
+        
+        optimized_path = optimizer.optimizePath(node_names, planner, config)
+        
+        # Capture Graph State
+        graph_state = {}
+        for node in node_names:
+            node_data = planner.graph.nodes[node]
+            graph_state[node] = {
+                'r': node_data.get('r'),
+                'P2n': node_data.get('P2n'),
+                'fixed_k': node_data.get('fixed_k')
+            }
+            
+        # Capture Metrics
+        stats, len_orig, len_opt = capture_performance_metrics(planner, node_names)
+        
+        # C. Store in Cache
+        cache[name] = {
+            'result': result, # Contains k_values, lengths, best_k
+            'path': optimized_path,
+            'graph_state': graph_state,
+            'stats': stats,
+            'len_orig': len_orig,
+            'len_opt': len_opt
+        }
+        progress.value += 1
+
+    progress.layout.display = 'none'
+    label.layout.display = 'none'
+
+    # 3. Define Dashboard Renderer
+    def render_dashboard(Env):
+        data = cache[Env]
+        res = data['result']
+        item = env_dict[Env]
+        planner = item['planner']
+        
+        # Restore Graph State
+        for node, attrs in data['graph_state'].items():
+            planner.graph.nodes[node].update(attrs)
+            
+        # --- Top Row: Map | Curve ---
+        fig = plt.figure(figsize=(14, 6))
+        gs = fig.add_gridspec(1, 2)
+        
+        # Plot 1: Map (Top Left)
+        ax_map = fig.add_subplot(gs[0, 0])
+        planner._collisionChecker.draw_enviroments(ax=ax_map)
+        planner._collisionChecker.draw_optimized_path(data['path'], planner, ax=ax_map)
+        ax_map.set_title(f"Environment {Env} | Optimal k={res['best_k']:.2f}")
+
+        # Plot 2: K-Sweep Curve (Top Right)
+        # We use the history returned by analyze_optimal_k
+        ax_curve = fig.add_subplot(gs[0, 1])
+        ax_curve.plot(res['k_values'], res['lengths'], 'b-o', label='Path Length')
+        
+        # Highlight Optimum
+        ax_curve.plot(res['best_k'], res['min_length'], 'r*', markersize=15, label=f'Optimum ({res["best_k"]:.2f})')
+        
+        ax_curve.set_xlabel('Asymmetry Factor (k)')
+        ax_curve.set_ylabel('Total Path Length [m]')
+        ax_curve.set_title(f'Optimization Landscape (r=0.5)')
+        ax_curve.grid(True, alpha=0.3)
+        ax_curve.legend()
+        
+        plt.tight_layout()
+        plt.show()
+        
+        # --- Bottom Row: Performance ---
+        plot_performance_data(data['stats'], data['len_orig'], data['len_opt'])
+
+    # 4. Create Viewer
+    dropdown = widgets.Dropdown(options=env_keys, value=env_keys[0], description='Select Env:')
+    
+    # Simple interaction container
+    container = widgets.VBox([widgets.Output()])
+    
+    def on_change(change):
+        if change['type'] == 'change' and change['name'] == 'value':
+            out = widgets.Output()
+            with out:
+                render_dashboard(change['new'])
+            container.children = [out]
+            
+    # Initial Render
+    with container.children[0]:
+        render_dashboard(dropdown.value)
+        
+    dropdown.observe(on_change, names='value')
+    display(dropdown, container)
 
 def capture_performance_metrics(planner, node_names):
     """

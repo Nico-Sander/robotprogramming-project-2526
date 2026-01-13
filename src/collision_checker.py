@@ -228,7 +228,7 @@ class CollisionChecker(object):
             bnorm = np.linalg.norm(bisector)
             
             # --- CHANGE: Increased distance from 0.7 to 1.5 ---
-            offset_dist = 1.5
+            offset_dist = 1.2
             
             if bnorm < 0.01:
                 offset = np.array([0, offset_dist])

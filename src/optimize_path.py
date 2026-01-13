@@ -162,18 +162,19 @@ class OptimizeFlyby():
             
         return results
 
-    def analyze_optimal_k(self, planner, node_names, r_fixed=0.5):
+    def analyze_optimal_k(self, planner, node_names, r_fixed=0.5, plot=True):
         """
-        Performs a parameter sweep to find the optimal global 'k',
-        applies it to the graph, and returns the optimized path data.
+        Performs a parameter sweep to find the optimal global 'k'.
+        Returns detailed results to allow custom visualization.
         """
         # 1. Define range of k to test
         k_values = np.linspace(0.1, 3.0, 30)
-        
         lengths = []
         
-        print(f"--- Starting K-Sweep for r_init={r_fixed} ---")
+        if plot:
+            print(f"--- Starting K-Sweep for r_init={r_fixed} ---")
         
+        # 2. Sweep Loop
         for k in k_values:
             # Clear for fair comparison
             clear_graph_attributes(planner)
@@ -186,34 +187,44 @@ class OptimizeFlyby():
             length = calculate_path_length(planner, node_names, use_curves=True)
             lengths.append(length)
 
-        # 2. Find the Minimum
+        # 3. Find the Minimum
         min_length = min(lengths)
         min_idx = lengths.index(min_length)
         best_k = k_values[min_idx]
         
-        print(f"--- Result ---")
-        print(f"Optimal Global k: {best_k:.2f}")
-        print(f"Minimum Length:   {min_length:.4f}m")
-        
-        # 3. Visualization of the Sweep
-        plt.figure(figsize=(10, 6))
-        plt.plot(k_values, lengths, 'b-o', label='Path Length')
-        plt.plot(best_k, min_length, 'r*', markersize=15, label=f'Optimum (k={best_k:.2f})')
-        plt.title(f'Optimization of k (for r_init={r_fixed})')
-        plt.xlabel('Asymmetry Factor k')
-        plt.ylabel('Total Path Length [m]')
-        plt.grid(True)
-        plt.legend()
-        plt.show()
+        if plot:
+            print(f"--- Result ---")
+            print(f"Optimal Global k: {best_k:.2f}")
+            print(f"Minimum Length:   {min_length:.4f}m")
+            
+            # Visualization (Internal)
+            plt.figure(figsize=(10, 6))
+            plt.plot(k_values, lengths, 'b-o', label='Path Length')
+            plt.plot(best_k, min_length, 'r*', markersize=15, label=f'Optimum (k={best_k:.2f})')
+            plt.title(f'Optimization of k (for r_init={r_fixed})')
+            plt.xlabel('Asymmetry Factor k')
+            plt.ylabel('Total Path Length [m]')
+            plt.grid(True)
+            plt.legend()
+            plt.show()
         
         # 4. Final Application (Side Effect)
         # Apply the best k found to the graph so it persists for the caller
-        print(f"Applying optimal k={best_k:.2f} to graph...")
+        if plot:
+            print(f"Applying optimal k={best_k:.2f} to graph...")
+            
         clear_graph_attributes(planner)
         config = {'r_init': r_fixed, 'k': best_k}
+        final_path = self.optimizePath(node_names, planner, config)
         
-        # Return the standard path result (node names and r values)
-        return self.optimizePath(node_names, planner, config)
+        # 5. Return Rich Data
+        return {
+            'best_k': best_k,
+            'min_length': min_length,
+            'k_values': k_values,
+            'lengths': lengths,
+            'optimized_path': final_path
+        }
 
     def optimize_individual_corners(self, path, planner, config={}):
         """
