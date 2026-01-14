@@ -211,7 +211,8 @@ class CollisionChecker(object):
                 
                 cx = [p[0] for p in curve_pts]
                 cy = [p[1] for p in curve_pts]
-                ax.plot(cx, cy, 'b-', linewidth=2, zorder=3)
+                # ax.plot(cx, cy, 'b-', linewidth=2, zorder=3)
+                ax.plot(cx, cy, color="#0084FF", linestyle='-', linewidth=2, zorder=3)
                 last_endpoint = E
             else:
                 last_endpoint = P_curr

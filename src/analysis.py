@@ -124,16 +124,10 @@ def calculate_path_length(planner, path: list, use_curves: bool = True) -> float
 
 def plot_performance_data(stats, len_original, len_optimized):
     """
-    Plots performance metrics:
-    1. Count of collision checks (Point, Line, Curve).
-    2. Total time spent on checks.
-    3. Path length comparison (Original vs Optimized).
-    
-    Uses a multi-axis layout (one left Y-axis, two right Y-axes) to display 
-    different units (Counts, Seconds, Meters) on the same chart.
+    Plots performance metrics with smart time scaling (ms vs s).
     """
     
-    # Initialize the figure with sufficient height for the top legend
+    # Initialize the figure
     fig, ax1 = plt.subplots(figsize=(12, 7))
     plt.title(f"Performance Metrics", pad=40)
 
@@ -142,66 +136,75 @@ def plot_performance_data(stats, len_original, len_optimized):
     x_pos = np.arange(len(categories))
     width = 0.25  # Width of the bars
 
+    # --- Pre-calculate Data for Time Scaling ---
+    pt_time = stats.get('pointInCollision', {}).get('time', 0.0)
+    ln_time = stats.get('lineInCollision', {}).get('time', 0.0)
+    crv_time = stats.get('curveInCollision', {}).get('time', 0.0)
+    raw_times = [pt_time, ln_time, crv_time, 0]
+
+    # Determine Scale (Smart Logic)
+    max_time = max(raw_times)
+    
+    if max_time < 1.0:
+        # Scale to Milliseconds
+        final_times = [t * 1000 for t in raw_times]
+        time_label = "Time (ms)"
+        # integer formatting (no decimals)
+        time_fmt_str = "{:.0f}" 
+    else:
+        # Keep as Seconds
+        final_times = raw_times
+        time_label = "Time (seconds)"
+        # 2 decimal places + 's' suffix
+        time_fmt_str = "{:.2f}s" 
+
     # --- Axis 1 (Left): Operation Counts ---
     color1 = 'tab:blue'
     ax1.set_ylabel('Number of Calls', color=color1, fontweight='bold')
     
-    # Retrieve data safely (default to 0 if missing)
     pt_count = stats.get('pointInCollision', {}).get('count', 0)
     ln_count = stats.get('lineInCollision', {}).get('count', 0)
     crv_count = stats.get('curveInCollision', {}).get('count', 0)
-    
-    # Plot counts for the first three categories
     counts = [pt_count, ln_count, crv_count, 0]
     
-    # Plot Count Bars (Shifted left)
     bars1 = ax1.bar(x_pos - width, counts, width, label='Count', color=color1, alpha=0.7)
     ax1.tick_params(axis='y', labelcolor=color1)
     
-    # Annotate bars with exact values
     for rect in bars1:
         height = rect.get_height()
         if height > 0:
             ax1.text(rect.get_x() + rect.get_width()/2., height,
-                    f'{int(height)}', ha='center', va='bottom', color=color1)
+                     f'{int(height)}', ha='center', va='bottom', color=color1)
 
-    # --- Axis 2 (Right #1): Execution Time ---
+    # --- Axis 2 (Right #1): Execution Time (Smart Scaled) ---
     ax2 = ax1.twinx() 
     color2 = 'tab:orange'
-    ax2.set_ylabel('Time (seconds)', color=color2, fontweight='bold')
+    ax2.set_ylabel(time_label, color=color2, fontweight='bold')
     
-    pt_time = stats.get('pointInCollision', {}).get('time', 0.0)
-    ln_time = stats.get('lineInCollision', {}).get('time', 0.0)
-    crv_time = stats.get('curveInCollision', {}).get('time', 0.0)
-    
-    times = [pt_time, ln_time, crv_time, 0]
-    
-    # Plot Time Bars (Centered on tick)
-    bars2 = ax2.bar(x_pos, times, width, label='Time', color=color2, alpha=0.7)
+    # Plot Time Bars using the scaled 'final_times'
+    bars2 = ax2.bar(x_pos, final_times, width, label='Time', color=color2, alpha=0.7)
     ax2.tick_params(axis='y', labelcolor=color2)
     
-    # Annotate bars with time values
+    # Annotate bars using the dynamic format string
     for rect in bars2:
         height = rect.get_height()
         if height > 0:
+            label_text = time_fmt_str.format(height)
             ax2.text(rect.get_x() + rect.get_width()/2., height,
-                    f'{height:.4f}s', ha='center', va='bottom', color=color2, fontsize=9)
+                     label_text, ha='center', va='bottom', color=color2, fontsize=9)
 
     # --- Axis 3 (Right #2): Path Length ---
-    # Create a third axis and offset its spine outward to avoid overlap with Axis 2
     ax3 = ax1.twinx()
     ax3.spines["right"].set_position(("axes", 1.15)) 
     color3 = 'tab:purple'
     ax3.set_ylabel('Path Length', color=color3, fontweight='bold')
     
-    # Plot comparison bars only at the 'Path Length' category index
     target_idx = 3 
     bars3_orig = ax3.bar(x_pos[target_idx] - width/2, len_original, width/2, color='gray', label='Original Len')
     bars3_opt  = ax3.bar(x_pos[target_idx] + width/2, len_optimized, width/2, color=color3, label='Optimized Len')
     
     ax3.tick_params(axis='y', labelcolor=color3)
     
-    # Annotate length values
     ax3.text(x_pos[target_idx] - width/2, len_original, f'{len_original:.1f}', ha='center', va='bottom', color='black', fontsize=9)
     ax3.text(x_pos[target_idx] + width/2, len_optimized, f'{len_optimized:.1f}', ha='center', va='bottom', color=color3, fontsize=9, fontweight='bold')
 
@@ -210,23 +213,20 @@ def plot_performance_data(stats, len_original, len_optimized):
     ax1.set_xticklabels(categories)
     ax1.grid(True, axis='y', alpha=0.3)
     
-    # Calculate and display percentage change for path length
     if len_original > 0:
         diff_percent = ((len_optimized - len_original) / len_original) * 100
-        # Position text slightly above the highest bar
         ax3.text(x_pos[target_idx], max(len_original, len_optimized) * 1.07, 
                  f"Change: {diff_percent:+.2f}%", ha='center', color='black', fontweight='bold')
 
     # --- Legend Configuration ---
-    # Place a single unified legend above the plot area (horizontally centered)
+    # Using the dynamic 'time_label' variable for the legend text
     fig.legend([bars1, bars2, bars3_orig, bars3_opt], 
-               ["Count", "Time (s)", "Orig. Length", "Opt. Length"], 
+               ["Count", time_label, "Orig. Length", "Opt. Length"], 
                loc="lower center", 
-               bbox_to_anchor=(0.5, 0.88), # Anchored relative to the figure
-               ncol=4, # Horizontal layout
+               bbox_to_anchor=(0.5, 0.88),
+               ncol=4, 
                frameon=False)
 
-    # Adjust layout to prevent clipping of the top legend
     plt.tight_layout()
     plt.subplots_adjust(top=0.85)
     plt.show()

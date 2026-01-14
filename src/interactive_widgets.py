@@ -236,6 +236,8 @@ def interactive_radius_exploration(env_dict, optimizer):
     }
     create_interactive_viewer(config, render_dashboard)
 
+
+    
 def interactive_k_exploration(env_dict, optimizer, r_fixed=0.5):
     """
     Performs a sweep of 'k' (asymmetry factor) values with a fixed radius 'r'.
@@ -375,7 +377,7 @@ def interactive_global_k_optimization(env_dict, optimizer):
         
         # A. Run the Analyzer (Suppress internal plot)
         # This returns the best k AND the sweep history we need for the curve
-        result = optimizer.analyze_optimal_k(planner, node_names, r_fixed=0.5, plot=False)
+        result = optimizer.optimize_global_k(planner, node_names, r_fixed=0.5, plot=False)
         
         # B. Get Clean Performance Stats for the Final Run
         # The analyzer ran the final path, but the monitor has mixed data from the sweep.
@@ -477,7 +479,7 @@ def interactive_global_k_optimization(env_dict, optimizer):
 def interactive_individual_k_optimization(env_dict, optimizer):
     """
     Runs 'Individual Corner Optimization' for all environments.
-    Compares the result against the 'Best Global K' baseline.
+    Compares the result against the 'Best Global K' baseline and the Original Path.
     """
     env_keys = list(env_dict.keys())
     cache = {}
@@ -494,7 +496,7 @@ def interactive_individual_k_optimization(env_dict, optimizer):
         
         # --- A. Baseline: Best Global K ---
         # Find the best single k for comparison
-        global_res = optimizer.analyze_optimal_k(planner, node_names, r_fixed=0.5, plot=False)
+        global_res = optimizer.optimize_global_k(planner, node_names, r_fixed=0.5, plot=False)
         len_global = global_res['min_length']
         best_global_k = global_res['best_k']
         
@@ -504,7 +506,7 @@ def interactive_individual_k_optimization(env_dict, optimizer):
         
         # 2. Run the Coordinate Descent
         # FIX: Pass parameters inside a 'config' dictionary, not as kwargs
-        optimizer.optimize_individual_corners(node_names, planner, config={'r_init': 0.5})
+        optimizer.optimize_individual_k(node_names, planner, config={'r_init': 0.5})
         
         # 3. Capture the Result
         # Run optimizePath one last time to ensure we get the final geometry 
@@ -560,37 +562,48 @@ def interactive_individual_k_optimization(env_dict, optimizer):
         planner._collisionChecker.draw_optimized_path(data['path'], planner, ax=ax_map)
         ax_map.set_title(f"Env {Env} | Individual Optimization")
 
-        # Plot 2: Improvement Comparison
+        # Plot 2: Improvement Comparison (Updated)
         ax_chart = fig.add_subplot(gs[0, 1])
         
-        labels = ['Best Global k\n(k={:.2f})'.format(data['best_global_k']), 'Individual k\n(Mixed)']
-        values = [data['len_global'], data['len_individual']]
-        colors = ['gray', 'green']
+        # Define 3 categories now
+        labels = [
+            'Original\n(Linear)', 
+            'Best Global k\n(k={:.2f})'.format(data['best_global_k']), 
+            'Individual k\n(Mixed)'
+        ]
+        values = [round(data['len_orig'], 2), round(data['len_global'], 2), round(data['len_individual'], 2)]
+        colors = ['lightgray', 'gray', 'green']
         
-        bars = ax_chart.bar(labels, values, color=colors, alpha=0.7, width=0.5)
+        bars = ax_chart.bar(labels, values, color=colors, alpha=0.8, width=0.6)
         ax_chart.set_ylabel('Total Path Length [m]')
         ax_chart.set_title(f"Optimization Results")
         
-        # Dynamic Y-Limit
+        # Dynamic Y-Limit (Account for all 3 values)
         min_val = min(values)
         max_val = max(values)
         margin = (max_val - min_val) * 2 if max_val != min_val else 1.0
         ax_chart.set_ylim(min_val - margin*0.1, max_val + margin*0.1)
         
-        # Add labels
+        # Add value labels on top of bars
         for bar in bars:
             height = bar.get_height()
             ax_chart.text(bar.get_x() + bar.get_width()/2., height,
-                    f'{height:.4f} m',
+                    f'{height:.2f} m',
                     ha='center', va='bottom', fontsize=10, fontweight='bold')
             
-        # Add Savings Annotation
+        # Add Savings Annotation (Global vs Individual)
+        # Position logic: Bars are at indices 0, 1, 2. The gap between Global(1) and Indiv(2) is at 1.5
         savings = data['len_global'] - data['len_individual']
         if savings > 0.0001:
-            ax_chart.text(0.5, (min_val + max_val)/2, 
+            # We place the text between the 2nd and 3rd bar
+            text_x_pos = 1.5 
+            # We place the text vertically between the two bar heights
+            text_y_pos = (data['len_global'] + data['len_individual']) / 2
+            
+            ax_chart.text(text_x_pos, text_y_pos, 
                          f" Improvement:\n-{savings:.4f} m", 
-                         ha='center', va='center', fontsize=12, color='green', 
-                         bbox=dict(facecolor='white', alpha=0.8, edgecolor='green'))
+                         ha='center', va='center', fontsize=11, color='green', 
+                         bbox=dict(facecolor='white', alpha=0.9, edgecolor='green'))
 
         plt.tight_layout()
         plt.show()

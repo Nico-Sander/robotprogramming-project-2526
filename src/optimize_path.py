@@ -9,33 +9,87 @@ class OptimizeFlyby():
 
     def optimizePath(self, path: list = [], planner = None, config: dict = {}):
         """
-        Main optimization routine. 
+        Executes the "Fly-by" optimization routine to smooth a jagged path using Quadratic Bezier curves.
+
+        This method implements an iterative approach to convert a list of waypoints into a G1-continuous 
+        path consisting of straight line segments and Bezier curves (rounding) at the corners. The algorithm 
+        alternates between calculating optimal control points ($P_{2n}$) and verifying collision constraints.
+
+        The optimization process consists of two main phases within a loop:
+        1. Relaxation Phase (Inverse Rounding): 
+           To prevent the smoothed path from "cutting the corner" too deeply and colliding with obstacles, 
+           the algorithm calculates a new virtual control point, $P_{2n}$, for every corner. This point is 
+           moved outward such that the resulting curve's apex touches the original node position ($P_{org}$).
+           
+           **Why is this a loop?** The formula to calculate a node's $P_{2n}$ depends on the positions of its immediate neighbors 
+           ($P_{prev}$ and $P_{next}$). Because those neighbors are also shifting their positions simultaneously 
+           to correct their own curves, a change in one node affects its neighbors, which in turn affects 
+           the original node again. The algorithm must therefore iterate through the entire path multiple 
+           times to propagate these changes until the whole chain of control points stabilizes (converges).
+
+        2. Collision Check Phase: 
+           Generates the actual geometry (tangent points S and E, and the curve itself) using the calculated 
+           $P_{2n}$. It validates these segments against the environment. If a collision is detected 
+           (in the curve or connecting lines), the smoothing radius ($r$) for the affected node is reduced 
+           to pull the geometry tighter to the corner, and the loop repeats.
+
+        Parameters:
+            path (list): A list of strings representing the node names in the solution path (e.g., ['start', '1', 'goal']).
+            planner (object): The planner instance containing the graph data structure (planner.graph) and 
+                              the collision checker (planner._collisionChecker).
+            config (dict): Configuration dictionary for optimization parameters:
+                           - 'r_init' (float): Initial radius for smoothing (default: 0.49).
+                           - 'r_step' (float): Decrement step size for radius reduction upon collision (default: 0.01).
+                           - 'k' (float/None): Global asymmetry factor. If None, dynamic symmetric rounding is used.
+
+        Returns:
+            list: A list of tuples, where each tuple contains (node_name, final_r_value).
+
+        Side Effects:
+            Modifies the `planner.graph` nodes in-place. Specifically, it updates or adds:
+            - 'r': The final optimized radius for the node.
+            - 'P2n': The coordinates of the calculated virtual control point.
+            - 'fixed_k': The asymmetry factor used (if a global k was provided).
         """
-        r_init = config.get('r_init', 0.49)
+        # --- Initialization ---
+        # Retrieve configuration values with defaults
+        r_init = min(config.get('r_init', 0.49), 0.49)
         r_step = config.get('r_step', 0.01)
         r_min = 0.02
-        global_k = config.get('k', None) # Global fallback
+        # Global 'k' serves as a fallback if no specific 'k' is defined on the node
+        global_k = config.get('k', None) 
 
         cc = planner._collisionChecker
         
+        # Initialize the radius map: tracks the current 'r' for each node
         r_map = {node: r_init for node in path}
+        
+        # Initialize the control point map: starts with the original node positions
+        # These P2n values will drift during the relaxation phase
         p2n_map = {name: np.array(planner.graph.nodes[name]['pos']) for name in path}
 
         # --- Helper: Geometry Calculation ---
         def get_tangent_points(P_prev, P_curr, P_next, r_val, node_name):
+            """
+            Calculates the start (S) and end (E) tangent points for the Bezier curve at a specific corner.
+            """
             d_in = np.linalg.norm(P_curr - P_prev)
             d_out = np.linalg.norm(P_next - P_curr)
             
-            # 1. Check if this specific node has a fixed 'k' set
+            # Determine the asymmetry factor (k)
+            # 1. Check if this specific node has a fixed 'k' attribute set in the graph
             node_k = planner.graph.nodes[node_name].get('fixed_k')
             
-            # 2. Priority: Node Attribute > Global Config > None (Dynamic)
+            # 2. Priority Logic: Node-specific 'k' > Global Config 'k' > None (Dynamic Metric Symmetry)
             target_k = node_k if node_k is not None else global_k
 
+            # Calculate lambda (lam_in/lam_out), which represents the distance along the tangent vectors
             if target_k is not None:
+                # Use fixed asymmetry factor if provided
                 lam_in, lam_out = r_val, r_val * target_k
             else:
-                # Dynamic Metric Symmetry
+                # Use Dynamic Metric Symmetry: Adjusts smoothing to respect the lengths of incoming/outgoing edges.
+                # If one edge is significantly shorter, the curve is constrained to fit within it.
                 if d_in <= d_out:
                     dist = r_val * d_in
                     lam_in = r_val
@@ -45,8 +99,11 @@ class OptimizeFlyby():
                     lam_out = r_val
                     lam_in = dist / d_in if d_in > 0 else 0
             
+            # Compute vector directions
             vec_in = P_prev - P_curr
             vec_out = P_next - P_curr
+            
+            # Calculate absolute positions of S (Start of curve) and E (End of curve)
             S = P_curr + lam_in * vec_in
             E = P_curr + lam_out * vec_out
             return S, E
@@ -57,29 +114,34 @@ class OptimizeFlyby():
             path_valid = True
             
             # 1. RELAXATION PHASE
+            # Iteratively adjust P2n (virtual control points) based on neighbors.
+            # This 'Inverse Rounding' ensures the resulting curve passes closer to the original path nodes.
+            # 15 iterations are generally sufficient for the positions to converge.
             for _relax in range(15): 
                 for i in range(1, len(path) - 1):
                     node = path[i]
                     prev_node = path[i-1]
                     next_node = path[i+1]
                     
-                    P_org = np.array(planner.graph.nodes[node]['pos'])
-                    P_prev_p2n = p2n_map[prev_node]
-                    P_curr_p2n = p2n_map[node]
-                    P_next_p2n = p2n_map[next_node]
+                    # Retrieve coordinates
+                    P_org = np.array(planner.graph.nodes[node]['pos']) # Original fixed position
+                    P_prev_p2n = p2n_map[prev_node]                    # Current neighbor control point
+                    P_curr_p2n = p2n_map[node]                         # Current node control point
+                    P_next_p2n = p2n_map[next_node]                    # Current neighbor control point
                     r = r_map[node]
                     
                     d_in = np.linalg.norm(P_curr_p2n - P_prev_p2n)
                     d_out = np.linalg.norm(P_next_p2n - P_curr_p2n)
                     
-                    # Logic to pick K for relaxation
+                    # Recalculate lambda weights (li/lo) for the relaxation formula
                     node_k = planner.graph.nodes[node].get('fixed_k')
                     target_k = node_k if node_k is not None else global_k
 
                     if target_k is not None:
                         li, lo = r, r * target_k
                     else:
-                        if d_in == 0 or d_out == 0: li, lo = r, r
+                        if d_in == 0 or d_out == 0: 
+                            li, lo = r, r
                         elif d_in <= d_out:
                             li = r
                             lo = (r * d_in) / d_out
@@ -87,74 +149,91 @@ class OptimizeFlyby():
                             lo = r
                             li = (r * d_out) / d_in
 
+                    # Apply Inverse Rounding Formula: P2n = (4*P_org - li*P_prev - lo*P_next) / (4 - li - lo)
+                    # This shifts P2n such that the apex of the Bezier curve aligns with P_org.
                     numerator = 4 * P_org - li * P_prev_p2n - lo * P_next_p2n
                     denominator = 4 - li - lo
                     if abs(denominator) < 0.001: denominator = 0.001
                     p2n_map[node] = numerator / denominator
 
             # 2. COLLISION CHECK PHASE
+            # Reconstruct the geometry for all nodes using the new P2n positions
             p2n_list = [p2n_map[name] for name in path]
             current_geom = [] 
             for i in range(1, len(path) - 1):
-                # Pass node_name to helper
                 S, E = get_tangent_points(p2n_list[i-1], p2n_list[i], p2n_list[i+1], r_map[path[i]], path[i])
                 current_geom.append({'S': S, 'E': E})
 
-            # Check Segments and Curves
+            # Verify all path components for collisions:
+            # - Straight segments between curves
+            # - The curves themselves
+            # - Dot products (ensure geometry is not folding back on itself)
             
-            # Start Segment
+            # A. Check Start Segment (From Start Node -> First Curve Start S)
             start_node = p2n_list[0]
             first_S = current_geom[0]['S']
+            # If the vector reverses direction or the line collides, shrink the first corner's radius
             if np.dot(p2n_list[1]-start_node, first_S-start_node) < 0 or cc.lineInCollision(start_node, first_S):
                  path_valid = False
                  r_map[path[1]] = max(r_min, r_map[path[1]] - r_step)
 
-            # Connectors
+            # B. Check Connectors (Lines connecting Curve A End -> Curve B Start)
             for i in range(len(current_geom) - 1):
                 end_pt_prev = current_geom[i]['E']
                 start_pt_next = current_geom[i+1]['S']
+                
+                # Vector between control points vs Vector between tangent points
                 vec_p2n = p2n_list[i+2] - p2n_list[i+1]
                 vec_connect = start_pt_next - end_pt_prev
                 
+                # Check for geometry validity (no reversal) and collision
                 if np.dot(vec_p2n, vec_connect) < 0 or cc.lineInCollision(end_pt_prev, start_pt_next):
                     path_valid = False
+                    # Reduce radius of both adjacent corners to create more space for the connector
                     r_map[path[i+1]] = max(r_min, r_map[path[i+1]] - r_step)
                     r_map[path[i+2]] = max(r_min, r_map[path[i+2]] - r_step)
 
-            # End Segment
+            # C. Check End Segment (From Last Curve End E -> Goal Node)
             last_E = current_geom[-1]['E']
             end_node = p2n_list[-1]
             if np.dot(end_node-p2n_list[-2], end_node-last_E) < 0 or cc.lineInCollision(last_E, end_node):
                  path_valid = False
                  r_map[path[-2]] = max(r_min, r_map[path[-2]] - r_step)
 
-            # Curves
+            # D. Check Curves (Discretized Bezier check)
             for i in range(len(current_geom)):
                 geom = current_geom[i]
                 node_name = path[i+1]
+                # P2n (p2n_list[i+1]) is the control point for the Bezier curve
                 if cc.curveInCollision(geom['S'], p2n_list[i+1], geom['E'], steps=20):
                     path_valid = False
                     r_map[node_name] = max(r_min, r_map[node_name] - r_step)
             
+            # If no collisions occurred and geometry is valid, the optimization is successful
             if path_valid:
                 break
         
         # --- Final Save ---
+        # Persist the calculated attributes back to the planner's graph for visualization and analysis
         results = []
         for i, node_name in enumerate(path):
             val = r_map[node_name]
+            
+            # Clamp values: Start/Goal must be 0, others must be >= r_min or 0
             if val <= r_min: val = 0.0
             if i == 0 or i == len(path)-1: val = 0.0
             
             planner.graph.nodes[node_name]['r'] = val
             
+            # Store the calculated P2n (Control Point)
+            # For start/goal/straight nodes, P2n is simply the node position
             if val > 0 and i > 0 and i < len(path)-1:
                 planner.graph.nodes[node_name]['P2n'] = p2n_map[node_name]
             else:
                 planner.graph.nodes[node_name]['P2n'] = np.array(planner.graph.nodes[node_name]['pos'])
             
-            # --- FIX: Save global_k to the graph if it was used ---
-            # This ensures calculate_path_length uses the correct geometry
+            # Store global_k if it was used, ensuring subsequent calculations (like path length)
+            # use the correct geometry settings.
             if global_k is not None:
                 planner.graph.nodes[node_name]['fixed_k'] = global_k
 
@@ -162,7 +241,7 @@ class OptimizeFlyby():
             
         return results
 
-    def analyze_optimal_k(self, planner, node_names, r_fixed=0.5, plot=True):
+    def optimize_global_k(self, planner, node_names, r_fixed=0.5, plot=True):
         """
         Performs a parameter sweep to find the optimal global 'k'.
         Returns detailed results to allow custom visualization.
@@ -226,7 +305,7 @@ class OptimizeFlyby():
             'optimized_path': final_path
         }
 
-    def optimize_individual_corners(self, path, planner, config={}):
+    def optimize_individual_k(self, path, planner, config={}):
         """
         Optimizes 'k' individually for every node using Coordinate Descent.
         """
@@ -236,8 +315,6 @@ class OptimizeFlyby():
         # We test a range of skews. 'None' represents the default dynamic/symmetric mode.
         k_candidates = [None] + list(np.linspace(0.4, 2.6, 12))
         
-        print(f"Starting Individual Corner Optimization...")
-        
         # Clear existing fixed_k attributes to start fresh
         for node in path:
             planner.graph.nodes[node].pop('fixed_k', None)
@@ -245,7 +322,6 @@ class OptimizeFlyby():
         # 2. Coordinate Descent Loop (2 Passes)
         for pass_idx in range(2):
             changes_made = False
-            print(f"--- Pass {pass_idx + 1} ---")
             
             for i in range(1, len(path) - 1):
                 node_name = path[i]
@@ -276,10 +352,8 @@ class OptimizeFlyby():
                 planner.graph.nodes[node_name]['fixed_k'] = current_best_k
 
             if not changes_made:
-                print("Converged early.")
                 break
                 
-        print(f"Optimization Complete.")
         
         # Final Run
         return self.optimizePath(path, planner, config={'r_init': r_base})
