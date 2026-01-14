@@ -1,4 +1,4 @@
-from shapely import Polygon, plotting
+from shapely import Polygon
 import numpy as np
 
 X_LIMITS = [0.0, 20.0]

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 from planners.IPPerfMonitor import IPPerfMonitor
 from benchmarks import X_LIMITS, Y_LIMITS
-from analysis import retrieve_path_positions
+from evaluation import retrieve_path_positions
 
 
 class CollisionChecker(object):

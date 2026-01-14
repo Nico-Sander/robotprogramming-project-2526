@@ -4,7 +4,7 @@ from IPython.display import display
 import matplotlib.pyplot as plt
 import numpy as np
 
-from analysis import (
+from evaluation import (
     retrieve_path_positions,
     clear_graph_attributes,
     capture_performance_metrics,

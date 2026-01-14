@@ -52,7 +52,7 @@ Gehen Sie davon aus, dass `r` (siehe Slides) zunächst via Config fest zwischen 
 Erzeugen Sie eine Visualisierungsfunktion, die die verschiedenen Segmente und Parabeln farblich hervorhebt.
 
 #### c)
-Testen, Visualisieren und Evaluieren Sie das Verfahren anhand der 4 Benchmarkszenarien. Stellen Sie grafisch die Anzahl der Kollisionsberechnungen, Berechnunszeit und die Länge des Pfades (hier müssen Sie noch eine Berechnung für die Parabeln erarbeiten) dar und Vergleichen Sie die Länge zum uprsprünglichen Pfad. Diskutieren Sie die Ergebnisse.
+Testen, Visualisieren und Evaluieren Sie das Verfahren anhand der 4 Benchmarkszenarien. Stellen Sie grafisch die Anzahl der Kollisionsberechnungen, Berechnunszeit und die Länge des Pfades (hier müssen Sie noch eine Berechnung für die Parabeln erarbeiten) dar und vergleichen Sie die Länge zum uprsprünglichen Pfad. Diskutieren Sie die Ergebnisse.
 
 #### d)
 Erweitern Sie noch die Möglichkeit `k` in $z_{neu}(k) = P_2$ (siehe Slide 101) in der Config vorgeben zu können. Und führen Sie die Tests aus *c)* nochmals für unterschiedliche Werte von `k` durch. Diskutieren Sie die Ergebnisse.

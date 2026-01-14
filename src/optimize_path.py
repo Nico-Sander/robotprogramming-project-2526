@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from analysis import calculate_path_length, clear_graph_attributes, retrieve_path_positions
+from evaluation import calculate_path_length, clear_graph_attributes
 
 class OptimizeFlyby():
     def __init__(self):
