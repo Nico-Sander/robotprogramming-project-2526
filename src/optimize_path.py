@@ -1,7 +1,7 @@
 import numpy as np
-from environment import CollisionChecker
 import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon as MatplotPolygon
+
+from analysis import calculate_path_length, clear_graph_attributes, retrieve_path_positions
 
 class OptimizeFlyby():
     def __init__(self):
@@ -11,203 +11,279 @@ class OptimizeFlyby():
         
         optimized_path = []
 
-        r_default = config.get("r_init", 0.45)
-
-
-        for i, node_name in enumerate(path):
-            if i == 1 or i == len(path)-1:
-                optimized_path.append((node_name, 0.0))
-            else:
-                optimized_path.append((node_name, r_default))
-
-
-
-
-import matplotlib.pyplot as plt
-
-class OptimizeFlyby:
-    def __init__(self):
-        pass
-
-
-    def optimizePath_combinedmodel(self, path, planner, config):
-
-
+    def optimizePath(self, path: list = [], planner = None, config: dict = {}):
+        """
+        Main optimization routine. 
+        """
         r_init = config.get('r_init', 0.49)
-        r_min = config.get('r_min', 0.02)
         r_step = config.get('r_step', 0.01)
-        
+        r_min = 0.02
+        global_k = config.get('k', None) # Global fallback
+
         cc = planner._collisionChecker
-        optimized_results = []
         
-        for i, node in enumerate(path):
+        r_map = {node: r_init for node in path}
+        p2n_map = {name: np.array(planner.graph.nodes[name]['pos']) for name in path}
+
+        # --- Helper: Geometry Calculation ---
+        def get_tangent_points(P_prev, P_curr, P_next, r_val, node_name):
+            d_in = np.linalg.norm(P_curr - P_prev)
+            d_out = np.linalg.norm(P_next - P_curr)
             
-            # Start- und Endpunkt: r ist immer 0
-            if i == 0 or i == len(path) - 1:
-                optimized_results.append((node, 0.0, "none"))
-                continue
+            # 1. Check if this specific node has a fixed 'k' set
+            node_k = planner.graph.nodes[node_name].get('fixed_k')
             
-            # Koordinaten aus dem Planer-Graphen abrufen
-            p_prev = np.array(planner.graph.nodes[path[i-1]]['pos'])
-            p_curr = np.array(planner.graph.nodes[node]['pos'])
-            p_next = np.array(planner.graph.nodes[path[i+1]]['pos'])
+            # 2. Priority: Node Attribute > Global Config > None (Dynamic)
+            target_k = node_k if node_k is not None else global_k
 
-            #Verhältnis der Segmentlängen k berechnen
-            dist12 = np.linalg.norm(p_curr - p_prev)
-            dist23 = np.linalg.norm(p_next - p_curr)
-            k = dist12 / dist23 if dist23 !=0 else 1.0
+            if target_k is not None:
+                lam_in, lam_out = r_val, r_val * target_k
+            else:
+                # Dynamic Metric Symmetry
+                if d_in <= d_out:
+                    dist = r_val * d_in
+                    lam_in = r_val
+                    lam_out = dist / d_out if d_out > 0 else 0
+                else:
+                    dist = r_val * d_out
+                    lam_out = r_val
+                    lam_in = dist / d_in if d_in > 0 else 0
             
-            best_r = 0.0
-            best_mode = "none"
+            vec_in = P_prev - P_curr
+            vec_out = P_next - P_curr
+            S = P_curr + lam_in * vec_in
+            E = P_curr + lam_out * vec_out
+            return S, E
 
-            #---------- beide Modelle testen -----------
+        # --- Main Optimization Loop ---
+        max_iterations = 50
+        for _ in range(max_iterations):
+            path_valid = True
+            
+            # 1. RELAXATION PHASE
+            for _relax in range(15): 
+                for i in range(1, len(path) - 1):
+                    node = path[i]
+                    prev_node = path[i-1]
+                    next_node = path[i+1]
+                    
+                    P_org = np.array(planner.graph.nodes[node]['pos'])
+                    P_prev_p2n = p2n_map[prev_node]
+                    P_curr_p2n = p2n_map[node]
+                    P_next_p2n = p2n_map[next_node]
+                    r = r_map[node]
+                    
+                    d_in = np.linalg.norm(P_curr_p2n - P_prev_p2n)
+                    d_out = np.linalg.norm(P_next_p2n - P_curr_p2n)
+                    
+                    # Logic to pick K for relaxation
+                    node_k = planner.graph.nodes[node].get('fixed_k')
+                    target_k = node_k if node_k is not None else global_k
 
-            for mode in ("flyby", "cutting"):
-
-                r = r_init
-
-                while r >= r_min:
-
-                    # Sicherheitscheck: r und r*k drüfen nicht >0.5 sein
-
-                    r_S = r
-                    r_E = r * k
-
-                    # Wenn r_S oder r_E die Segmentmitte überschreiten, r verkleinern
-                    if r_S > 0.5 or r_E > 0.5:
-                        r-= r_step
-                        continue
-
-                    S = p_curr + r * (p_prev - p_curr)
-                    E = p_curr + (r * k) * (p_next - p_curr)
-
-                    if mode == "flyby":
-                        #nenner = 1.0 - 0.25 * r * (1.0 + k)
-                        #zaehler = p_curr - 0.25 * r * (p_prev + k * p_next)
-                        #p_2n = zaehler / nenner
-
-                        p_2n = 2 * p_curr - 0.5 * S - 0.5 * E
-
+                    if target_k is not None:
+                        li, lo = r, r * target_k
                     else:
-                        # cutting
-                        p_2n = p_curr
+                        if d_in == 0 or d_out == 0: li, lo = r, r
+                        elif d_in <= d_out:
+                            li = r
+                            lo = (r * d_in) / d_out
+                        else:
+                            lo = r
+                            li = (r * d_out) / d_in
 
-                        #S = p_curr + r * (p_prev - p_curr)
-                        #E = p_curr + (r * k) * (p_next - p_curr)
+                    numerator = 4 * P_org - li * P_prev_p2n - lo * P_next_p2n
+                    denominator = 4 - li - lo
+                    if abs(denominator) < 0.001: denominator = 0.001
+                    p2n_map[node] = numerator / denominator
 
-                    segment_safe = (
-                        not cc.pointInCollision(p_2n) and 
-                        not cc.lineInCollision(S, p_2n) and 
-                        not cc.lineInCollision(p_2n, E))
-                    
-                    parabola_safe = True
-                    if segment_safe:
-                        # Diskretisierung der Kurve in 20 Schritte
-                        for t in np.linspace(0, 1, 20):
-                            # Quadratische Bézier-Formel
-                            p_curve = (1-t)**2 * S + 2*(1-t)*t * p_2n + t**2 * E
-                            if cc.pointInCollision(p_curve):
-                                parabola_safe = False
-                                break
+            # 2. COLLISION CHECK PHASE
+            p2n_list = [p2n_map[name] for name in path]
+            current_geom = [] 
+            for i in range(1, len(path) - 1):
+                # Pass node_name to helper
+                S, E = get_tangent_points(p2n_list[i-1], p2n_list[i], p2n_list[i+1], r_map[path[i]], path[i])
+                current_geom.append({'S': S, 'E': E})
 
-                    if segment_safe and parabola_safe:
-                        if r > best_r:
-                            best_r = r
-                            best_mode = mode
-                        break
-
-                    r -= r_step
-                    r = round(r, 3)
-
-            optimized_results.append((node, best_r, best_mode))
-
-        return optimized_results
-
-                    
-
-    def visualize_results(self, env_id, results, env_dict, figsize: tuple=(8, 8))-> plt.Axes:
-        data = env_dict[str(env_id)]
-        planner = data['planner']
-        obs_dict = data['env']
-        original_path = np.array(data['smooth_path'])
-        
-        fig, ax = plt.subplots(figsize=figsize)
-        
-        # 1. Achsen & Limits (Dein Stil)
-        try:
-            limits = planner.environment.limits 
-            ax.set_xlim(limits[0][0], limits[0][1])
-            ax.set_ylim(limits[1][0], limits[1][1])
-            ax.set_xticks(range(0, int(limits[0][1]) + 1))
-            ax.set_yticks(range(0, int(limits[1][1]) + 1))
-        except:
-            pass
-        ax.grid(True, linestyle='-', alpha=0.5)
-
-        # 2. Hindernisse (Rot, wie gewünscht)
-        for obs_name, poly in obs_dict.items():
-            if hasattr(poly, 'exterior'):
-                x, y = poly.exterior.xy
-                ax.add_patch(MatplotPolygon(np.column_stack((x, y)), color='red', alpha=0.25, zorder=1))
-
-        # 3. Originaler Pfad (Referenz)
-        ax.plot(original_path[:, 0], original_path[:, 1], 'k--', alpha=0.2, label='Referenzpfad', zorder=2)
-
-        # 4. Kurven, Kontrollpunkte und Segmente
-        for i in range(1, len(original_path) - 1):
-            p1, p2, p3 = original_path[i-1], original_path[i], original_path[i+1]
-            node_name, r, mode = results[i]
+            # Check Segments and Curves
             
-            if r > 0:
-                dist12 = np.linalg.norm(p1 - p2)
-                dist23 = np.linalg.norm(p3 - p2)
-                k = dist12 / dist23 if dist23 != 0 else 1.0
-                
-                S = p2 + r * (p1 - p2)
-                E = p2 + (r * k) * (p3 - p2)
-                
-                # Berechnung P2n (deine Logik)
-                nenner = 1.0 - 0.25 * r * (1.0 + k)
-                zaehler = p2 - 0.25 * r * (p1 + k * p3)
-                p2n_flyby = zaehler / nenner
-                
-                if mode == "flyby":
-                    p2n = p2n_flyby
-                    color = 'blue'
-                else:
-                    p2n = p2 - (p2n_flyby - p2)
-                    color = 'green'
-                
-                # --- NEU: Hilfslinien zum virtuellen Punkt P2n ---
-                ax.plot([S[0], p2n[0], E[0]], [S[1], p2n[1], E[1]], 
-                        color=color, linestyle=':', linewidth=1, alpha=0.6, zorder=3)
-                # Punkt P2n markieren
-                ax.scatter(p2n[0], p2n[1], color=color, marker='x', s=30, zorder=5)
-                
-                # Parabel zeichnen
-                t_vals = np.linspace(0, 1, 20)
-                parabola = np.array([(1-t)**2 * S + 2*(1-t)*t * p2n + t**2 * E for t in t_vals])
-                ax.plot(parabola[:, 0], parabola[:, 1], color=color, linewidth=2.5, zorder=4)
-                
-                # Verbindungslinien (schwarzer Pfad)
-                if i == 1:
-                    ax.plot([original_path[0][0], S[0]], [original_path[0][1], S[1]], 'k-', linewidth=1.5, zorder=3)
-                
-                next_r = results[i+1][1] if i+1 < len(original_path)-1 else 0
-                if next_r == 0:
-                     ax.plot([E[0], p3[0]], [E[1], p3[1]], 'k-', linewidth=1.5, zorder=3)
-                else:
-                    S_next = p3 + next_r * (p2 - p3)
-                    ax.plot([E[0], S_next[0]], [E[1], S_next[1]], 'k-', linewidth=1.5, zorder=3)
+            # Start Segment
+            start_node = p2n_list[0]
+            first_S = current_geom[0]['S']
+            if np.dot(p2n_list[1]-start_node, first_S-start_node) < 0 or cc.lineInCollision(start_node, first_S):
+                 path_valid = False
+                 r_map[path[1]] = max(r_min, r_map[path[1]] - r_step)
 
-        # 5. Start (S) und Ziel (G) Markierungen
-        ax.scatter(original_path[0,0], original_path[0,1], color="lightgreen", s=400, edgecolors='k', zorder=6)
-        ax.text(original_path[0,0], original_path[0,1], "S", fontweight="bold", ha="center", va="center", zorder=7)
+            # Connectors
+            for i in range(len(current_geom) - 1):
+                end_pt_prev = current_geom[i]['E']
+                start_pt_next = current_geom[i+1]['S']
+                vec_p2n = p2n_list[i+2] - p2n_list[i+1]
+                vec_connect = start_pt_next - end_pt_prev
+                
+                if np.dot(vec_p2n, vec_connect) < 0 or cc.lineInCollision(end_pt_prev, start_pt_next):
+                    path_valid = False
+                    r_map[path[i+1]] = max(r_min, r_map[path[i+1]] - r_step)
+                    r_map[path[i+2]] = max(r_min, r_map[path[i+2]] - r_step)
+
+            # End Segment
+            last_E = current_geom[-1]['E']
+            end_node = p2n_list[-1]
+            if np.dot(end_node-p2n_list[-2], end_node-last_E) < 0 or cc.lineInCollision(last_E, end_node):
+                 path_valid = False
+                 r_map[path[-2]] = max(r_min, r_map[path[-2]] - r_step)
+
+            # Curves
+            for i in range(len(current_geom)):
+                geom = current_geom[i]
+                node_name = path[i+1]
+                if cc.curveInCollision(geom['S'], p2n_list[i+1], geom['E'], steps=20):
+                    path_valid = False
+                    r_map[node_name] = max(r_min, r_map[node_name] - r_step)
+            
+            if path_valid:
+                break
         
-        ax.scatter(original_path[-1,0], original_path[-1,1], color="lightblue", s=400, edgecolors='k', zorder=6)
-        ax.text(original_path[-1,0], original_path[-1,1], "G", fontweight="bold", ha="center", va="center", zorder=7)
+        # --- Final Save ---
+        results = []
+        for i, node_name in enumerate(path):
+            val = r_map[node_name]
+            if val <= r_min: val = 0.0
+            if i == 0 or i == len(path)-1: val = 0.0
+            
+            planner.graph.nodes[node_name]['r'] = val
+            
+            if val > 0 and i > 0 and i < len(path)-1:
+                planner.graph.nodes[node_name]['P2n'] = p2n_map[node_name]
+            else:
+                planner.graph.nodes[node_name]['P2n'] = np.array(planner.graph.nodes[node_name]['pos'])
+            
+            # --- FIX: Save global_k to the graph if it was used ---
+            # This ensures calculate_path_length uses the correct geometry
+            if global_k is not None:
+                planner.graph.nodes[node_name]['fixed_k'] = global_k
 
-        ax.set_aspect('equal')
-        ax.set_title(f"Optimierter Pfad (Env {env_id}) - Blau: Fly-by / Green: Cutting")
-        plt.tight_layout()
-        plt.show()
+            results.append((node_name, val))
+            
+        return results
+
+    def analyze_optimal_k(self, planner, node_names, r_fixed=0.5, plot=True):
+        """
+        Performs a parameter sweep to find the optimal global 'k'.
+        Returns detailed results to allow custom visualization.
+        """
+        # 1. Define range of k to test
+        k_values = np.linspace(0.1, 3.0, 30)
+        lengths = []
+        
+        if plot:
+            print(f"--- Starting K-Sweep for r_init={r_fixed} ---")
+        
+        # 2. Sweep Loop
+        for k in k_values:
+            # Clear for fair comparison
+            clear_graph_attributes(planner)
+            
+            # Run Optimizer (Sweep)
+            config = {'r_init': r_fixed, 'k': k}
+            self.optimizePath(node_names, planner, config)
+            
+            # Measure Length
+            length = calculate_path_length(planner, node_names, use_curves=True)
+            lengths.append(length)
+
+        # 3. Find the Minimum
+        min_length = min(lengths)
+        min_idx = lengths.index(min_length)
+        best_k = k_values[min_idx]
+        
+        if plot:
+            print(f"--- Result ---")
+            print(f"Optimal Global k: {best_k:.2f}")
+            print(f"Minimum Length:   {min_length:.4f}m")
+            
+            # Visualization (Internal)
+            plt.figure(figsize=(10, 6))
+            plt.plot(k_values, lengths, 'b-o', label='Path Length')
+            plt.plot(best_k, min_length, 'r*', markersize=15, label=f'Optimum (k={best_k:.2f})')
+            plt.title(f'Optimization of k (for r_init={r_fixed})')
+            plt.xlabel('Asymmetry Factor k')
+            plt.ylabel('Total Path Length [m]')
+            plt.grid(True)
+            plt.legend()
+            plt.show()
+        
+        # 4. Final Application (Side Effect)
+        # Apply the best k found to the graph so it persists for the caller
+        if plot:
+            print(f"Applying optimal k={best_k:.2f} to graph...")
+            
+        clear_graph_attributes(planner)
+        config = {'r_init': r_fixed, 'k': best_k}
+        final_path = self.optimizePath(node_names, planner, config)
+        
+        # 5. Return Rich Data
+        return {
+            'best_k': best_k,
+            'min_length': min_length,
+            'k_values': k_values,
+            'lengths': lengths,
+            'optimized_path': final_path
+        }
+
+    def optimize_individual_corners(self, path, planner, config={}):
+        """
+        Optimizes 'k' individually for every node using Coordinate Descent.
+        """
+
+        # 1. Config
+        r_base = config.get('r_init', 0.5)
+        # We test a range of skews. 'None' represents the default dynamic/symmetric mode.
+        k_candidates = [None] + list(np.linspace(0.4, 2.6, 12))
+        
+        print(f"Starting Individual Corner Optimization...")
+        
+        # Clear existing fixed_k attributes to start fresh
+        for node in path:
+            planner.graph.nodes[node].pop('fixed_k', None)
+
+        # 2. Coordinate Descent Loop (2 Passes)
+        for pass_idx in range(2):
+            changes_made = False
+            print(f"--- Pass {pass_idx + 1} ---")
+            
+            for i in range(1, len(path) - 1):
+                node_name = path[i]
+                current_best_k = planner.graph.nodes[node_name].get('fixed_k')
+                
+                # A. Measure Baseline
+                self.optimizePath(path, planner, config={'r_init': r_base})
+                best_len = calculate_path_length(planner, path, use_curves=True)
+                
+                # B. Test Candidates
+                for k_test in k_candidates:
+                    if k_test == current_best_k: continue
+                    
+                    # Apply Candidate K to this node
+                    planner.graph.nodes[node_name]['fixed_k'] = k_test
+                    
+                    # Run Engine
+                    self.optimizePath(path, planner, config={'r_init': r_base})
+                    curr_len = calculate_path_length(planner, path, use_curves=True)
+                    
+                    # Check for improvement
+                    if curr_len < best_len - 0.001: 
+                        best_len = curr_len
+                        current_best_k = k_test
+                        changes_made = True
+                
+                # C. Lock in the Winner
+                planner.graph.nodes[node_name]['fixed_k'] = current_best_k
+
+            if not changes_made:
+                print("Converged early.")
+                break
+                
+        print(f"Optimization Complete.")
+        
+        # Final Run
+        return self.optimizePath(path, planner, config={'r_init': r_base})
