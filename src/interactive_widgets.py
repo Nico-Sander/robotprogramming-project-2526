@@ -374,42 +374,34 @@ def interactive_global_k_optimization(env_dict, optimizer):
         item = env_dict[name]
         planner = item['planner']
         node_names = item['solution_node_names']
-        
-        # A. Run the Analyzer (Suppress internal plot)
-        # This returns the best k AND the sweep history we need for the curve
-        result = optimizer.optimize_global_k(planner, node_names, r_fixed=0.5, plot=False)
-        
-        # B. Get Clean Performance Stats for the Final Run
-        # The analyzer ran the final path, but the monitor has mixed data from the sweep.
-        # We run it ONE last time purely to capture clean stats for the bar chart.
+
+        # A. Clear Data before the optimization starts
         IPPerfMonitor.clearData()
         clear_graph_attributes(planner)
-        config = {'r_init': 0.5, 'k': result['best_k']}
         
-        optimized_path = optimizer.optimizePath(node_names, planner, config)
+        # B. Run the Analyzer (Suppress internal plot)
+        # This returns the best k AND the sweep history we need for the curve
+        result = optimizer.optimize_global_k(planner, node_names, r_fixed=0.5, plot=False)
+
+        # C. Capture the performance metrics
+        stats, len_orig, len_global = capture_performance_metrics(planner, node_names)
         
-        # Capture Graph State
-        graph_state = {}
-        for node in node_names:
-            node_data = planner.graph.nodes[node]
-            graph_state[node] = {
-                'r': node_data.get('r'),
-                'P2n': node_data.get('P2n'),
-                'fixed_k': node_data.get('fixed_k')
-            }
-            
-        # Capture Metrics
-        stats, len_orig, len_opt = capture_performance_metrics(planner, node_names)
-        
-        # C. Store in Cache
+        # D. Store in Cache
         cache[name] = {
-            'result': result, # Contains k_values, lengths, best_k
-            'path': optimized_path,
-            'graph_state': graph_state,
+            'result': result, 
+            'path': result['optimized_path'], # Use the path returned by the optimizer
+            'graph_state': {
+                node: {
+                    'r': planner.graph.nodes[node].get('r'),
+                    'P2n': planner.graph.nodes[node].get('P2n'),
+                    'fixed_k': planner.graph.nodes[node].get('fixed_k')
+                } for node in node_names
+            },
             'stats': stats,
             'len_orig': len_orig,
-            'len_opt': len_opt
+            'len_opt': len_global
         }
+        
         progress.value += 1
 
     progress.layout.display = 'none'
@@ -479,7 +471,7 @@ def interactive_global_k_optimization(env_dict, optimizer):
 def interactive_individual_k_optimization(env_dict, optimizer):
     """
     Runs 'Individual Corner Optimization' for all environments.
-    Compares the result against the 'Best Global K' baseline and the Original Path.
+    Compares the result against Symmetric, Best Global K, and Original baselines.
     """
     env_keys = list(env_dict.keys())
     cache = {}
@@ -494,29 +486,42 @@ def interactive_individual_k_optimization(env_dict, optimizer):
         planner = item['planner']
         node_names = item['solution_node_names']
         
-        # --- A. Baseline: Best Global K ---
-        # Find the best single k for comparison
+        # --- A. Baseline 1: Symmetric (k=None) ---
+        clear_graph_attributes(planner)
+        # Run standard optimization with dynamic symmetric rounding
+        optimizer.optimizePath(node_names, planner, config={'r_init': 0.5, 'k': None})
+        len_symmetric = calculate_path_length(planner, node_names, use_curves=True)
+
+        # --- B. Baseline 2: Best Global K ---
+        # Find the best single k for comparison (Sweep)
+        # Note: We don't track stats here to avoid polluting the Individual Optimization metrics
         global_res = optimizer.optimize_global_k(planner, node_names, r_fixed=0.5, plot=False)
         len_global = global_res['min_length']
         best_global_k = global_res['best_k']
         
-        # --- B. Individual Optimization ---
-        # 1. Clear previous state
+        # --- C. Target: Individual Optimization ---
+        
+        # 1. Clear Previous Data (Ensure we measure ONLY the individual optimization process)
+        IPPerfMonitor.clearData() 
         clear_graph_attributes(planner)
         
         # 2. Run the Coordinate Descent
-        # FIX: Pass parameters inside a 'config' dictionary, not as kwargs
+        # We perform the heavy optimization here and capture its specific performance cost
         optimizer.optimize_individual_k(node_names, planner, config={'r_init': 0.5})
         
-        # 3. Capture the Result
-        # Run optimizePath one last time to ensure we get the final geometry 
-        # based on the fixed_k values now stored in the graph.
-        config = {'r_init': 0.5, 'k': None, 'r_decay': 0.8}
+        # 3. Capture Final State
+        # Run optimizePath one last time to ensure graph attributes (P2n, etc.) are set for drawing
+        config = {'r_init': 0.5, 'k': None} 
         final_path_individual = optimizer.optimizePath(node_names, planner, config)
         
+        # 4. Capture Metrics
+        # Length of the final individual result
         len_individual = calculate_path_length(planner, node_names, use_curves=True)
         
-        # 4. Capture Graph State
+        # Performance stats of the Coordinate Descent process
+        stats, len_orig, _ = capture_performance_metrics(planner, node_names)
+        
+        # 5. Capture Graph State for Visualization
         graph_state = {}
         for node in node_names:
             node_data = planner.graph.nodes[node]
@@ -525,11 +530,9 @@ def interactive_individual_k_optimization(env_dict, optimizer):
                 'P2n': node_data.get('P2n'),
                 'fixed_k': node_data.get('fixed_k')
             }
-            
-        # 5. Metrics
-        stats, len_orig, _ = capture_performance_metrics(planner, node_names)
 
         cache[name] = {
+            'len_symmetric': len_symmetric,    # <--- Stored Symmetric Baseline
             'len_global': len_global,
             'best_global_k': best_global_k,
             'len_individual': len_individual,
@@ -562,29 +565,38 @@ def interactive_individual_k_optimization(env_dict, optimizer):
         planner._collisionChecker.draw_optimized_path(data['path'], planner, ax=ax_map)
         ax_map.set_title(f"Env {Env} | Individual Optimization")
 
-        # Plot 2: Improvement Comparison (Updated)
+        # Plot 2: Improvement Comparison (Updated for 4 Bars)
         ax_chart = fig.add_subplot(gs[0, 1])
         
-        # Define 3 categories now
+        # --- NEW LABELS AND VALUES ---
         labels = [
             'Original\n(Linear)', 
+            'Symmetric\n(k=Sym)',              # <--- New Bar
             'Best Global k\n(k={:.2f})'.format(data['best_global_k']), 
             'Individual k\n(Mixed)'
         ]
-        values = [round(data['len_orig'], 2), round(data['len_global'], 2), round(data['len_individual'], 2)]
-        colors = ['lightgray', 'gray', 'green']
         
-        bars = ax_chart.bar(labels, values, color=colors, alpha=0.8, width=0.6)
+        values = [
+            round(data['len_orig'], 2), 
+            round(data['len_symmetric'], 2),   # <--- New Value
+            round(data['len_global'], 2), 
+            round(data['len_individual'], 2)
+        ]
+        
+        # Colors: Light Gray (Orig) -> Light Blue (Sym) -> Dark Gray (Global) -> Green (Best/Indiv)
+        colors = ['lightgray', 'lightblue', 'gray', 'green']
+        
+        bars = ax_chart.bar(labels, values, color=colors, alpha=0.9, width=0.6)
         ax_chart.set_ylabel('Total Path Length [m]')
         ax_chart.set_title(f"Optimization Results")
         
-        # Dynamic Y-Limit (Account for all 3 values)
+        # Dynamic Y-Limit
         min_val = min(values)
         max_val = max(values)
         margin = (max_val - min_val) * 2 if max_val != min_val else 1.0
-        ax_chart.set_ylim(min_val - margin*0.1, max_val + margin*0.1)
+        ax_chart.set_ylim(min_val - margin*0.15, max_val + margin*0.1)
         
-        # Add value labels on top of bars
+        # Add value labels
         for bar in bars:
             height = bar.get_height()
             ax_chart.text(bar.get_x() + bar.get_width()/2., height,
@@ -592,12 +604,10 @@ def interactive_individual_k_optimization(env_dict, optimizer):
                     ha='center', va='bottom', fontsize=10, fontweight='bold')
             
         # Add Savings Annotation (Global vs Individual)
-        # Position logic: Bars are at indices 0, 1, 2. The gap between Global(1) and Indiv(2) is at 1.5
+        # We position this between the last two bars (indices 2 and 3)
         savings = data['len_global'] - data['len_individual']
         if savings > 0.0001:
-            # We place the text between the 2nd and 3rd bar
-            text_x_pos = 1.5 
-            # We place the text vertically between the two bar heights
+            text_x_pos = 2.5 # Between index 2 (Global) and 3 (Individual)
             text_y_pos = (data['len_global'] + data['len_individual']) / 2
             
             ax_chart.text(text_x_pos, text_y_pos, 
@@ -608,7 +618,7 @@ def interactive_individual_k_optimization(env_dict, optimizer):
         plt.tight_layout()
         plt.show()
         
-        # Performance Stats
+        # Performance Stats (Comparison of the Individual Optimization Process)
         plot_performance_data(data['stats'], data['len_orig'], data['len_individual'])
 
     # 3. Create Viewer
