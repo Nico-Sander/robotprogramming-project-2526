@@ -112,18 +112,85 @@ Die Implementierung im Code zeigt zwei Aspekte bezüglich der Performance:
 1.  **Berechnungsaufwand pro Schritt:** Die mathematische Anwendung von $k$ innerhalb der Funktion `get_tangent_points` ist trivial und erzeugt keinen messbaren Mehraufwand gegenüber der symmetrischen Berechnung ($O(1)$).
 2.  **Einfluss auf die Konvergenz:** Ein ungünstig gewählter globaler $k$-Wert kann jedoch die Rechenzeit indirekt signifikant erhöhen. Zwingt das globale $k$ die Kurvengeometrie in Hindernisse (Kollision), greift der in Aufgabe 2a beschriebene Reparaturmechanismus. Dies führt dazu, dass die äußere Schleife (`max_iterations`) häufiger durchlaufen werden muss, um den Radius $r$ schrittweise zu reduzieren, bis die durch $k$ verzerrte Kurve kollisionsfrei ist.
 
-## Diskussion des Benchmarks für lokale optimale k-Parameter
- 
-Durch die Berechnung lokaler k-Werte kann nun für jede einzelne Überschleifkurve ein individuell optimaler Parameter bestimmt werden. Im Gegensatz zu den vorherigen Ansätzen mit festem oder symmetrischem globalem k-Parameter wird hier versucht, jede Kurve möglichst gut an ihre lokale Geometrie anzupassen.
- 
-Für jedes Kurvensegment werden verschiedene k-Werte getestet, wobei jeweils die resultierende Pfadlänge bewertet wird. Je nach Implementierung bezieht sich diese Bewertung entweder auf die Länge des aktuellen Kurvensegments oder auf die Länge des bis zu diesem Punkt aufgebauten Gesamtpfades. In beiden Fällen wird derjenige k-Wert gewählt, der das jeweilige Längenmaß minimiert. (Wie passiert das bei uns?)
- 
-Da die Wahl des k-Parameters die Geometrie der Kurve und damit auch die Position des nachfolgenden Startpunkts beeinflusst, müssen die Knoten sequentiell von Anfang bis Ende optimiert werden. Der optimale k-Wert für Knoten i beeinflusst direkt die Ausgangssituation für Knoten i+1, weshalb die Optimierung nicht unabhängig für alle Ecken durchgeführt werden kann. Das Verfahren entspricht damit einer sequentiellen, lokalen (greedy) Optimierung.
- 
-Durch diese iterative Suche nach optimalen lokalen k-Parametern konnten folgende prozentuale Pfadlängenverlängerungen gegenüber dem ursprünglichen, nicht verrundeten Pfad erreicht werden: Environment 1: 2.15%, Environment 2: 2.70%, Environment 3: 2.65% und Environment 4: 2.28%.
- 
-Damit liefert dieser Ansatz die kürzesten Flyby-Pfade unter allen getesteten Überschleif-Varianten. Der Nachteil dieses Verfahrens liegt jedoch im deutlich erhöhten Rechenaufwand. Durch die iterative Optimierung jedes einzelnen Kurvensegments steigt die Anzahl der notwendigen Kollisionsprüfungen, insbesondere der Point-Checks, um ein Vielfaches gegenüber den vorherigen Methoden.
- 
-Dies führt zu einer erheblichen Erhöhung der Laufzeit, die in den Experimenten mehr als um den Faktor 100 über der Laufzeit des Ansatzes mit dynamischem k-Parameter lag.
- 
-Zusammenfassend lässt sich festhalten, dass bereits mit dem dynamischen k-Ansatz ein sehr gutes Ergebnis erzielt werden kann, bei dem die Pfadlänge nur moderat gegenüber dem Originalpfad zunimmt. Soll jedoch die minimale mögliche Pfadlänge unter Verwendung von Überschleifen erreicht werden, so ist eine lokale Optimierung der k-Parameter notwendig. Diese liefert zwar die besten geometrischen Ergebnisse, erkauft sich dies jedoch durch einen massiv erhöhten Rechenaufwand aufgrund der stark gestiegenen Anzahl an Kollisionskontrollen.
+
+## Diskussion der lokalen Optimierung des Asymmetriefaktors (Aufgabe 2e)
+
+Ergänzend zur globalen Optimierung wurde ein Verfahren implementiert, das für jeden Knoten einen individuellen, lokal optimalen Asymmetriefaktor $k$ bestimmt. Im Gegensatz zum globalen Ansatz, der einen Kompromiss für alle Kurven erzwingt, kann sich hier jede Kurve ideal an die lokale Geometrie (z.B. spitzer vs. stumpfer Winkel, lange vs. kurze angrenzende Segmente) anpassen.
+
+### Methodik: Coordinate Descent
+
+Da die Wahl des Faktors $k$ an einem Knoten $i$ durch die Verschiebung des virtuellen Kontrollpunktes $P_{2n}$ auch die Geometrie der angrenzenden Segmente und damit die optimalen Parameter der Nachbarknoten beeinflusst, lassen sich die Ecken nicht unabhängig voneinander optimieren.
+
+Zur Lösung dieses Problems wurde ein **Coordinate Descent Algorithmus** implementiert (siehe `optimize_individual_k`):
+
+1.  **Iteratives Vorgehen:** Der Algorithmus iteriert sequenziell über alle Wegpunkte des Pfades.
+2.  **Lokale Evaluation:** An jedem Knoten wird eine Reihe von Kandidaten für $k$ (Standardbereich $0.4$ bis $2.6$ sowie die dynamische Symmetrie) getestet.
+3.  **Globale Bewertung:** Für jeden Kandidaten wird temporär eine vollständige Pfadberechnung durchgeführt. Bewertungskriterium ist dabei die **Gesamtlänge des Pfades**. Es wird derjenige $k$-Wert fest eingeloggt, der die Gesamtlänge minimiert.
+4.  **Konvergenz:** Da die Änderung eines Knotens neue Potenziale bei den Nachbarn freisetzen kann, wird dieser Prozess in mehreren Durchläufen (Passes) wiederholt, bis sich die Pfadlänge nicht mehr signifikant verbessert.
+
+### Analyse der Ergebnisse
+
+Die iterative Suche nach lokalen Optima liefert erwartungsgemäß die kürzesten Pfade unter allen getesteten Varianten. Gegenüber dem ursprünglichen, ungeglätteten Pfad (lineare Referenz) ergeben sich folgende Verlängerungen:
+
+* **Environment 1:** +2.15%
+* **Environment 2:** +2.70%
+* **Environment 3:** +2.65%
+* **Environment 4:** +2.28%
+
+Diese Werte stellen das geometrische Optimum des implementierten Fly-By-Verfahrens dar. Durch die individuelle Anpassung wird der "Overshoot" (das notwendige Ausholen nach außen) an jeder Ecke auf das absolute Minimum reduziert, das zur Vermeidung von Kollisionen notwendig ist.
+
+### Aufwand-Nutzen-Diskussion
+
+Der entscheidende Nachteil dieses Verfahrens liegt im massiv erhöhten Rechenaufwand.
+Für jeden Knoten werden ca. 13 verschiedene $k$-Werte getestet. Bei jedem Test muss der gesamte Pfad relaxiert ("Inverse Rounding") und auf Kollisionen geprüft werden. Dies führt zu einer Laufzeit, die in den Experimenten um den Faktor **>100** höher lag als bei der Berechnung mit einem dynamischen oder globalen $k$.
+
+**Fazit:**
+Die lokale Optimierung demonstriert das theoretische Maximum der Pfadqualität. Für praktische Anwendungen, insbesondere wenn (Neu-)Planungszeit eine Rolle spielt, ist der Grenznutzen im Vergleich zum dynamischen Standardverfahren (`k=None`) jedoch fraglich. Die dynamische Symmetrie liefert bereits sehr gute Ergebnisse bei einem Bruchteil der Rechenzeit. Der Einsatz des Coordinate Descent ist daher nur in Szenarien gerechtfertigt, in denen der Pfad einmalig offline berechnet wird und dann sehr häufig (z.B. in der Serienfertigung) zykluszeitkritisch abgefahren wird.
+
+## Umsetzung auf einem Industrieroboter (Aufgabe 3)
+
+Um die theoretisch berechneten Pfade in die Realität zu übertragen, müssen die Besonderheiten realer Manipulatoren berücksichtigt werden. Dieser Abschnitt beleuchtet die Unterschiede zwischen unserer vereinfachten Simulation und der physikalischen Ausführung sowie die notwendigen Schritte zur Ansteuerung.
+
+### Definition und Abgrenzung: Industrieroboter
+
+Ein Industrieroboter ist definitionsgemäß ein automatisch gesteuerter, wiederprogrammierbarer, vielfach einsetzbarer Manipulator, der in drei oder mehr Achsen programmierbar ist (vgl. ISO 8373). In der Praxis handelt es sich meist um serielle Kinematiken (z.B. 6-Achs-Knickarmroboter), die durch ihre Gelenkstellungen eine Pose im Raum einnehmen.
+
+**Vergleich: Unsere 2D-Implementierung vs. Realer Roboter**
+Unsere Implementierung abstrahiert den Roboter stark:
+* **Unsere Simulation:** Wir betrachten einen Punktroboter in einer 2D-Ebene ($x, y$). Die Orientierung spielt für die Kollisionsprüfung in unserer Darstellung keine Rolle.
+* **Industrieroboter:** Ein realer Roboter agiert im dreidimensionalen Raum. Eine Pose wird nicht nur durch die Position ($x, y, z$), sondern auch durch die Orientierung ($A, B, C$ bzw. Roll-Pitch-Yaw) definiert. Um unseren 2D-Pfad abzufahren, müsste man die $z$-Koordinate fixieren und die Orientierung des Werkzeugs (TCP) konstant halten (z.B. senkrecht zum Boden).
+
+### Arbeitsraum vs. Konfigurationsraum
+
+Ein zentrales Konzept der Robotik ist die Unterscheidung zwischen dem Raum, in dem sich der Roboter bewegt, und dem Raum, in dem er gesteuert wird.
+
+1.  **Der allgemeine Fall (Industrieroboter):**
+    Bahnplaner (wie PRM oder RRT) arbeiten üblicherweise im **Konfigurationsraum (C-Space)**. Das bedeutet, es werden direkt Gelenkstellungen ($q_1, q_2, \dots, q_n$) geplant.
+    * Um zu prüfen, ob eine geplante Gelenkstellung zulässig ist, wird sie mittels **Vorwärtskinematik** in den Arbeitsraum transformiert. Dort findet dann der Check gegen die Hindernisse statt.
+    * Ein Pfad ist somit eine Trajektorie im Gelenkwinkelraum.
+
+2.  **Der Sonderfall (Unser Projekt):**
+    In unserer Simulation betrachten wir einen **planaren Punktroboter**. Die Freiheitsgrade des Roboters sind lediglich seine $x$- und $y$-Positionen.
+    * In diesem speziellen Fall **entspricht der Arbeitsraum dem Konfigurationsraum**. Eine Koordinate $(x, y)$ beschreibt sowohl die Position im Raum als auch den vollständigen "Gelenkzustand" des Roboters.
+    * Deshalb konnten wir direkt im Arbeitsraum planen und optimieren.
+
+3.  **Transfer auf den Roboterarm:**
+    Da unser Algorithmus einen Pfad im Arbeitsraum ($x, y$) liefert, muss dieser für einen 6-Achs-Roboter erst nutzbar gemacht werden. Die Steuerung des Roboters muss die kartesischen Koordinaten des Pfades mittels **Inverser Kinematik** in die entsprechenden Gelenkwinkel umrechnen, um die Pose physikalisch anzufahren.
+
+### Bewegungsbefehle und Ansteuerung
+
+Da unser Algorithmus geometrische Primitive (Geraden und Parabeln) im Arbeitsraum liefert, bieten sich zwei Ansteuerungsstrategien an:
+
+**A. Approximation durch Überschleifen (Blending)**
+Die meisten Industriesteuerungen arbeiten mit "Move"-Befehlen für Punkte. Anstatt die Kurve exakt vorzugeben, übergibt man die Eckpunkte ($P_{org}$) und einen Parameter für die Ungenauigkeit.
+* **KUKA (KRL):** `LIN P2 C_DIS` (Überschleifen basierend auf Distanz).
+* **ABB (RAPID):** `MoveL p2, v1000, z50, tool0` (ZoneData definiert den Radius).
+* *Nachteil:* Die Steuerung generiert eine eigene Kurve (oft Splines oder Polynome), die evtl. von unserer berechneten, kollisionsgeprüften Parabel abweicht.
+
+**B. Exakte Bahnführung (Spline/Stützpunkte)**
+Um die von uns berechnete $G^1$-stetige Geometrie exakt abzufahren, können Spline-Befehle genutzt werden, bei denen Stützpunkte ($S, P_{2n}, E$) übergeben werden.
+* **KUKA:** Verwendung von `SPLINE`-Blöcken.
+* **Vorteil:** Der Roboter folgt exakt der im Arbeitsraum geplanten und validierten Bahn.
+
+**Fazit:**
+Der implementierte Algorithmus fungiert als **kartesischer Bahnplaner**. Er liefert eine geometrisch optimale Lösung im Arbeitsraum. Bei der Übertragung auf einen Industrieroboter übernimmt die Robotersteuerung die komplexe Aufgabe, diesen Arbeitsraumpfad (via Inverser Kinematik) in Bewegungen des Konfigurationsraums umzusetzen.
