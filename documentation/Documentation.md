@@ -48,7 +48,7 @@ Zur Evaluierung des implementierten Verfahrens wurden die vier Benchmark-Szenari
 
 Ein zentrales Ergebnis der Untersuchung ist das Verhältnis zwischen dem gewählten Radius $r$ und der resultierenden Gesamtlänge des Pfades.
 
-* **Verlängerung durch Inverse Rounding:** Im Gegensatz zu klassischen Glättungsverfahren (z. B. Chaikin-Algorithmus oder einfaches Corner Cutting), welche den Pfad durch das "Abschneiden" von Ecken verkürzen, führt das hier implementierte **Inverse Rounding** zu einer **Verlängerung** der Wegstrecke gegenüber dem ursprünglichen, stückweise linearen Pfad.
+* **Verlängerung durch Inverse Rounding:** Im Gegensatz zu klassischen Glättungsverfahren (z. B. einfaches Corner Cutting), welche den Pfad durch das "Abschneiden" von Ecken verkürzen, führt das hier implementierte **Inverse Rounding** zu einer **Verlängerung** der Wegstrecke gegenüber dem ursprünglichen, stückweise linearen Pfad.
 * **Begründung:** Die Optimierungsstrategie erzwingt, dass die glättende Parabel den ursprünglichen Wegpunkt $P_{org}$ berührt (siehe Aufgabe 2a). Um dies bei steigendem Radius $r$ zu gewährleisten, muss der virtuelle Kontrollpunkt $P_{2n}$ geometrisch weiter nach außen geschoben werden. Der Roboter fährt also effektiv einen größeren Bogen *um* die theoretische Ecke herum, anstatt sie abzukürzen.
 * **Linearer Zusammenhang:** Die Auswertungen (siehe "Radius Impact Analysis" Plot) zeigen eine näherungsweise lineare Korrelation zwischen dem Radius und der Pfadlänge. Dies entspricht der geometrischen Erwartung, da die Distanzverschiebung der Kontrollpunkte linear von den Parametern $l_i$ und $l_o$ abhängt, welche wiederum direkt proportional zu $r$ sind.
 
@@ -104,9 +104,26 @@ Abschließend lässt sich die Sinnhaftigkeit eines globalen $k$-Wertes sowie des
 Die Vorgabe eines einzigen, globalen Asymmetriefaktors für den gesamten Pfad erweist sich in der Praxis oft als suboptimal. Ein Pfad in komplexen Umgebungen besteht aus einer heterogenen Abfolge von Segmenten (kurz-lang, lang-kurz, lang-lang).
 * Ein globales $k \neq 1$ erzwingt eine einheitliche Verzerrung aller Kurven (z. B. immer "kurzer Eingang, langer Ausgang").
 * Während dies einer spezifischen Ecke zugutekommen kann (z. B. Übergang von einem engen Korridor in einen freien Raum), verschlechtert es zwangsläufig Ecken mit umgekehrter Topologie (Übergang von freiem Raum in einen Korridor).
+* Die Analyse der Benchmarkszenarien zeigt, dass bei maximalem Radius $r$ und erzwungenem, absolut symmetrischen $k$ (`k = None`) die Länge des Pfades immer kürzer ist als beim gefundenen optimalen $k$. Das absolut symmetrische k ist in Bezug auf die Pfadlänge also zu bevorzugen, da es für verschiedenste Segmentkombinationen (kurz-lang, lang-kurz, lang-lang) gute Ergebnisse erzeugt.
 * Daher ist ein globales Optimum für $k$ meist nur ein Kompromiss, der den "durchschnittlichen Fehler" minimiert, aber selten jede Ecke ideal glättet.
 
 **Rechenleistung und Zeitverhalten:**
 Die Implementierung im Code zeigt zwei Aspekte bezüglich der Performance:
 1.  **Berechnungsaufwand pro Schritt:** Die mathematische Anwendung von $k$ innerhalb der Funktion `get_tangent_points` ist trivial und erzeugt keinen messbaren Mehraufwand gegenüber der symmetrischen Berechnung ($O(1)$).
-2.  **Einfluss auf die Konvergenz:** Ein ungünstig gewählter globaler $k$-Wert kann die Rechenzeit indirekt signifikant erhöhen. Zwingt das globale $k$ die Kurvengeometrie in Hindernisse (Kollision), greift der in Aufgabe 2a beschriebene Reparaturmechanismus. Dies führt dazu, dass die äußere Schleife (`max_iterations`) häufiger durchlaufen werden muss, um den Radius $r$ schrittweise zu reduzieren, bis die durch $k$ verzerrte Kurve kollisionsfrei ist.
+2.  **Einfluss auf die Konvergenz:** Ein ungünstig gewählter globaler $k$-Wert kann jedoch die Rechenzeit indirekt signifikant erhöhen. Zwingt das globale $k$ die Kurvengeometrie in Hindernisse (Kollision), greift der in Aufgabe 2a beschriebene Reparaturmechanismus. Dies führt dazu, dass die äußere Schleife (`max_iterations`) häufiger durchlaufen werden muss, um den Radius $r$ schrittweise zu reduzieren, bis die durch $k$ verzerrte Kurve kollisionsfrei ist.
+
+## Diskussion des Benchmarks für lokale optimale k-Parameter
+ 
+Durch die Berechnung lokaler k-Werte kann nun für jede einzelne Überschleifkurve ein individuell optimaler Parameter bestimmt werden. Im Gegensatz zu den vorherigen Ansätzen mit festem oder symmetrischem globalem k-Parameter wird hier versucht, jede Kurve möglichst gut an ihre lokale Geometrie anzupassen.
+ 
+Für jedes Kurvensegment werden verschiedene k-Werte getestet, wobei jeweils die resultierende Pfadlänge bewertet wird. Je nach Implementierung bezieht sich diese Bewertung entweder auf die Länge des aktuellen Kurvensegments oder auf die Länge des bis zu diesem Punkt aufgebauten Gesamtpfades. In beiden Fällen wird derjenige k-Wert gewählt, der das jeweilige Längenmaß minimiert. (Wie passiert das bei uns?)
+ 
+Da die Wahl des k-Parameters die Geometrie der Kurve und damit auch die Position des nachfolgenden Startpunkts beeinflusst, müssen die Knoten sequentiell von Anfang bis Ende optimiert werden. Der optimale k-Wert für Knoten i beeinflusst direkt die Ausgangssituation für Knoten i+1, weshalb die Optimierung nicht unabhängig für alle Ecken durchgeführt werden kann. Das Verfahren entspricht damit einer sequentiellen, lokalen (greedy) Optimierung.
+ 
+Durch diese iterative Suche nach optimalen lokalen k-Parametern konnten folgende prozentuale Pfadlängenverlängerungen gegenüber dem ursprünglichen, nicht verrundeten Pfad erreicht werden: Environment 1: 2.15%, Environment 2: 2.70%, Environment 3: 2.65% und Environment 4: 2.28%.
+ 
+Damit liefert dieser Ansatz die kürzesten Flyby-Pfade unter allen getesteten Überschleif-Varianten. Der Nachteil dieses Verfahrens liegt jedoch im deutlich erhöhten Rechenaufwand. Durch die iterative Optimierung jedes einzelnen Kurvensegments steigt die Anzahl der notwendigen Kollisionsprüfungen, insbesondere der Point-Checks, um ein Vielfaches gegenüber den vorherigen Methoden.
+ 
+Dies führt zu einer erheblichen Erhöhung der Laufzeit, die in den Experimenten mehr als um den Faktor 100 über der Laufzeit des Ansatzes mit dynamischem k-Parameter lag.
+ 
+Zusammenfassend lässt sich festhalten, dass bereits mit dem dynamischen k-Ansatz ein sehr gutes Ergebnis erzielt werden kann, bei dem die Pfadlänge nur moderat gegenüber dem Originalpfad zunimmt. Soll jedoch die minimale mögliche Pfadlänge unter Verwendung von Überschleifen erreicht werden, so ist eine lokale Optimierung der k-Parameter notwendig. Diese liefert zwar die besten geometrischen Ergebnisse, erkauft sich dies jedoch durch einen massiv erhöhten Rechenaufwand aufgrund der stark gestiegenen Anzahl an Kollisionskontrollen.
