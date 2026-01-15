@@ -51,6 +51,7 @@ class OptimizeFlyby():
             - 'P2n': The coordinates of the calculated virtual control point.
             - 'fixed_k': The asymmetry factor used (if a global k was provided).
         """
+
         # --- Initialization ---
         # Retrieve configuration values with defaults
         r_init = min(config.get('r_init', 0.49), 0.49)
@@ -243,10 +244,39 @@ class OptimizeFlyby():
 
     def optimize_global_k(self, planner, node_names, r_fixed=0.5, plot=True):
         """
-        Performs a parameter sweep to find the optimal global 'k'.
-        Returns detailed results to allow custom visualization.
+        Performs a parameter sweep to identify the optimal global asymmetry factor ($k$) that minimizes the G1-continuous path length.
+
+        This method systematically tests a range of scalar values for the asymmetry factor $k$, which controls the 
+        "skew" of the Bezier curves at path corners. For each candidate value, it executes the full fly-by 
+        optimization routine and measures the resulting total path length. It identifies the global minimum from 
+        these samples, effectively performing a grid search over the hyperparameter space.
+
+        If plotting is enabled, it generates a visualization of the optimization landscape (Length vs. $k$), 
+        which typically exhibits a convex shape where the optimal $k$ balances cutting corners tightly versus 
+        maintaining efficient straight-line connections. Finally, the method reapplies the optimal configuration 
+        to the planner graph to ensure the object's state reflects the best found solution.
+
+        Parameters:
+            planner (object): The planner instance containing the graph data structure and collision checker.
+            node_names (list): A list of node identifiers (strings) representing the sequence of the path.
+            r_fixed (float): The initial smoothing radius to use consistently across the sweep (default: 0.5).
+            plot (bool): If True, prints the results to stdout and renders a matplotlib graph of the sweep (default: True).
+
+        Returns:
+            dict: A dictionary containing the optimization results:
+                  - 'best_k' (float): The asymmetry factor that yielded the shortest path.
+                  - 'min_length' (float): The length of the path at the optimal k.
+                  - 'k_values' (array): The array of k candidates tested.
+                  - 'lengths' (list): The corresponding path lengths for each candidate.
+                  - 'optimized_path' (list): The optimization result (radius map) for the best k.
+
+        Side Effects:
+            - Modifies `planner.graph` attributes ('r', 'P2n', 'fixed_k') repeatedly during the sweep.
+            - Leaves the `planner.graph` in the state corresponding to the optimal `best_k`.
+            - Generates a matplotlib figure and prints text to stdout if `plot` is True.
         """
         # 1. Define range of k to test
+        # Create a linear space of candidate values for the asymmetry factor from 0.1 to 3.0
         k_values = np.linspace(0.1, 3.0, 30)
         lengths = []
         
@@ -254,19 +284,24 @@ class OptimizeFlyby():
             print(f"--- Starting K-Sweep for r_init={r_fixed} ---")
         
         # 2. Sweep Loop
+        # Iterate through every candidate k value to evaluate its performance
         for k in k_values:
-            # Clear for fair comparison
+            # Clear existing graph attributes to ensure a fair comparison for this specific k
+            # without artifacts from previous iterations
             clear_graph_attributes(planner)
             
             # Run Optimizer (Sweep)
+            # Execute the fly-by optimization with the current candidate k
             config = {'r_init': r_fixed, 'k': k}
             self.optimizePath(node_names, planner, config)
             
             # Measure Length
+            # Calculate the resulting G1-continuous path length
             length = calculate_path_length(planner, node_names, use_curves=True)
             lengths.append(length)
 
         # 3. Find the Minimum
+        # Identify the global minimum length and the corresponding k value
         min_length = min(lengths)
         min_idx = lengths.index(min_length)
         best_k = k_values[min_idx]
@@ -277,6 +312,7 @@ class OptimizeFlyby():
             print(f"Minimum Length:   {min_length:.4f}m")
             
             # Visualization (Internal)
+            # Plot the optimization landscape: Length vs Asymmetry Factor
             plt.figure(figsize=(10, 6))
             plt.plot(k_values, lengths, 'b-o', label='Path Length')
             plt.plot(best_k, min_length, 'r*', markersize=15, label=f'Optimum (k={best_k:.2f})')
@@ -288,7 +324,8 @@ class OptimizeFlyby():
             plt.show()
         
         # 4. Final Application (Side Effect)
-        # Apply the best k found to the graph so it persists for the caller
+        # Apply the best k found to the graph so it persists for the caller.
+        # This ensures the planner object is left in the optimized state.
         if plot:
             print(f"Applying optimal k={best_k:.2f} to graph...")
             
@@ -297,6 +334,7 @@ class OptimizeFlyby():
         final_path = self.optimizePath(node_names, planner, config)
         
         # 5. Return Rich Data
+        # Return a dictionary containing both the result and the sweep data for external analysis
         return {
             'best_k': best_k,
             'min_length': min_length,
@@ -307,53 +345,98 @@ class OptimizeFlyby():
 
     def optimize_individual_k(self, path, planner, config={}):
         """
-        Optimizes 'k' individually for every node using Coordinate Descent.
+        Optimizes the asymmetry factor ($k$) for each intermediate node individually using a Coordinate Descent algorithm.
+
+        This method fine-tunes the path geometry by iterating through every corner and testing a discrete set 
+        of asymmetry factors ($k$). Unlike global optimization, which applies a single $k$ to the entire path, 
+        this approach allows each corner to adopt a unique skew that best fits its local geometry (e.g., adapting 
+        differently to sharp turns versus obtuse angles).
+
+        The algorithm employs a greedy Coordinate Descent strategy:
+        1. It iterates sequentially through the list of nodes.
+        2. For each node, it measures the current total path length as a baseline.
+        3. It then tentatively applies every candidate $k$ value (including `None` for dynamic symmetry) to 
+           that specific node while keeping others fixed.
+        4. The fly-by optimization is executed for each candidate, and the $k$ yielding the shortest total 
+           path is "locked in" before moving to the next node.
+        
+        This process repeats for up to two full passes over the path or until the solution converges (no further 
+        improvements are detected).
+
+        Parameters:
+            path (list): A list of node identifiers (strings) representing the sequence of the path.
+            planner (object): The planner instance containing the graph data structure and collision checker.
+            config (dict): Configuration dictionary. Primarily uses 'r_init' (default: 0.5) as the base radius 
+                           for the optimization runs.
+
+        Returns:
+            list: The result of the final `optimizePath` run, containing a list of tuples (node_name, final_r_value).
+
+        Side Effects:
+            - Modifies `planner.graph` nodes in-place, specifically setting or updating the 'fixed_k' attribute 
+              for every intermediate node in the path.
+            - Overwrites 'r' and 'P2n' attributes during the internal optimization calls.
         """
 
         # 1. Config
         r_base = config.get('r_init', 0.5)
+        
         # We test a range of skews. 'None' represents the default dynamic/symmetric mode.
+        # The range 0.4 to 2.6 covers acute to obtuse rounding behaviors.
         k_candidates = [None] + list(np.linspace(0.4, 2.6, 12))
         
         # Clear existing fixed_k attributes to start fresh
+        # This ensures no previous optimization artifacts interfere with the baseline
         for node in path:
             planner.graph.nodes[node].pop('fixed_k', None)
 
         # 2. Coordinate Descent Loop (2 Passes)
+        # We perform up to 2 full passes over all nodes to allow changes to propagate.
+        # If node A changes, it might enable node B to improve further in the next pass.
         for pass_idx in range(2):
             changes_made = False
             
+            # Iterate over intermediate nodes only (excluding Start and Goal)
             for i in range(1, len(path) - 1):
                 node_name = path[i]
                 current_best_k = planner.graph.nodes[node_name].get('fixed_k')
                 
                 # A. Measure Baseline
+                # Run the optimizer with the current configuration of the graph
                 self.optimizePath(path, planner, config={'r_init': r_base})
+                # Calculate the score (Length) to beat
                 best_len = calculate_path_length(planner, path, use_curves=True)
                 
                 # B. Test Candidates
+                # Try every possible k value for THIS specific node
                 for k_test in k_candidates:
                     if k_test == current_best_k: continue
                     
-                    # Apply Candidate K to this node
+                    # Apply Candidate K to this node temporarily
                     planner.graph.nodes[node_name]['fixed_k'] = k_test
                     
                     # Run Engine
+                    # Re-optimize the path to see how the new k affects the geometry and collisions
                     self.optimizePath(path, planner, config={'r_init': r_base})
                     curr_len = calculate_path_length(planner, path, use_curves=True)
                     
                     # Check for improvement
+                    # We use a small epsilon (1mm) to avoid oscillation on float precision noise
                     if curr_len < best_len - 0.001: 
                         best_len = curr_len
                         current_best_k = k_test
                         changes_made = True
                 
                 # C. Lock in the Winner
+                # The best k found becomes the fixed setting for this node before moving to the next node
                 planner.graph.nodes[node_name]['fixed_k'] = current_best_k
 
+            # Convergence Check: If a full pass resulted in no changes, we have found a local minimum.
             if not changes_made:
                 break
                 
         
         # Final Run
+        # Execute one last optimization with the fully tuned parameters to ensure 
+        # the graph state (P2n, r) exactly matches the best found configuration.
         return self.optimizePath(path, planner, config={'r_init': r_base})
