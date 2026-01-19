@@ -147,50 +147,49 @@ Für jeden Knoten werden ca. 13 verschiedene $k$-Werte getestet. Bei jedem Test 
 **Fazit:**
 Die lokale Optimierung demonstriert das theoretische Maximum der Pfadqualität. Für praktische Anwendungen, insbesondere wenn (Neu-)Planungszeit eine Rolle spielt, ist der Grenznutzen im Vergleich zum dynamischen Standardverfahren (`k=None`) jedoch fraglich. Die dynamische Symmetrie liefert bereits sehr gute Ergebnisse bei einem Bruchteil der Rechenzeit. Der Einsatz des Coordinate Descent ist daher nur in Szenarien gerechtfertigt, in denen der Pfad einmalig offline berechnet wird und dann sehr häufig (z.B. in der Serienfertigung) zykluszeitkritisch abgefahren wird.
 
-## Umsetzung auf einem Industrieroboter (Aufgabe 3)
+# Umsetzung auf einem Industrieroboter (Aufgabe 3)
 
-Um die theoretisch berechneten Pfade in die Realität zu übertragen, müssen die Besonderheiten realer Manipulatoren berücksichtigt werden. Dieser Abschnitt beleuchtet die Unterschiede zwischen unserer vereinfachten Simulation und der physikalischen Ausführung sowie die notwendigen Schritte zur Ansteuerung.
+Um die theoretisch berechneten Pfade in die Realität zu übertragen, müssen die Besonderheiten realer Manipulatoren berücksichtigt werden. Dieser Abschnitt beleuchtet die Unterschiede zwischen unserer vereinfachten Simulation und der physikalischen Ausführung sowie die Flexibilität des Algorithmus hinsichtlich der Ansteuerung.
 
-### Definition und Abgrenzung: Industrieroboter
+## 1. Was ist ein Industrieroboter?
 
-Ein Industrieroboter ist definitionsgemäß ein automatisch gesteuerter, wiederprogrammierbarer, vielfach einsetzbarer Manipulator, der in drei oder mehr Achsen programmierbar ist (vgl. ISO 8373). In der Praxis handelt es sich meist um serielle Kinematiken (z.B. 6-Achs-Knickarmroboter), die durch ihre Gelenkstellungen eine Pose im Raum einnehmen.
+Ein Industrieroboter ist definitionsgemäß ein automatisch gesteuerter, wiederprogrammierbarer, vielfach einsetzbarer Manipulator, der in drei oder mehr Achsen programmierbar ist (vgl. ISO 8373). In der industriellen Praxis handelt es sich dabei häufig um serielle Kinematiken, wie etwa 6-Achs-Knickarmroboter. Der Zustand des Roboters wird primär durch seinen Gelenkvektor ($q_1, \dots, q_6$) beschrieben, während sich die Pose des Werkzeugs (TCP) erst über die Vorwärtskinematik aus dieser Konfiguration ergibt.
 
-**Vergleich: Unsere 2D-Implementierung vs. Realer Roboter**
-Unsere Implementierung abstrahiert den Roboter stark:
-* **Unsere Simulation:** Wir betrachten einen Punktroboter in einer 2D-Ebene ($x, y$). Die Orientierung spielt für die Kollisionsprüfung in unserer Darstellung keine Rolle.
-* **Industrieroboter:** Ein realer Roboter agiert im dreidimensionalen Raum. Eine Pose wird nicht nur durch die Position ($x, y, z$), sondern auch durch die Orientierung ($A, B, C$ bzw. Roll-Pitch-Yaw) definiert. Um unseren 2D-Pfad abzufahren, müsste man die $z$-Koordinate fixieren und die Orientierung des Werkzeugs (TCP) konstant halten (z.B. senkrecht zum Boden).
+## 2. Übertragung des 2D-Punktroboter-Pfades (Arbeitsraum vs. Konfigurationsraum)
 
-### Arbeitsraum vs. Konfigurationsraum
+In unserer Simulation bewegen wir einen Punktroboter in einer 2D-Ebene $(x,y)$ ohne Ausdehnung und Orientierung. Dies stellt einen Sonderfall dar, in dem der Arbeitsraum (Workspace) mit dem Konfigurationsraum (C-Space) zusammenfällt.
 
-Ein zentrales Konzept der Robotik ist die Unterscheidung zwischen dem Raum, in dem sich der Roboter bewegt, und dem Raum, in dem er gesteuert wird.
+Um diesen Pfad mit einem realen 6-Achs-Roboter abzufahren, müssen folgende Schritte erfolgen:
 
-1.  **Der allgemeine Fall (Industrieroboter):**
-    Bahnplaner (wie PRM oder RRT) arbeiten üblicherweise im **Konfigurationsraum (C-Space)**. Das bedeutet, es werden direkt Gelenkstellungen ($q_1, q_2, \dots, q_n$) geplant.
-    * Um zu prüfen, ob eine geplante Gelenkstellung zulässig ist, wird sie mittels **Vorwärtskinematik** in den Arbeitsraum transformiert. Dort findet dann der Check gegen die Hindernisse statt.
-    * Ein Pfad ist somit eine Trajektorie im Gelenkwinkelraum.
+1.  **Erweiterung der Pose:** Der 2D-Pfad $(x, y)$ muss zu einer 3D-Pose $(x, y, z, A, B, C)$ erweitert werden. Typischerweise wird hierfür eine konstante Arbeitshöhe $z$ fixiert und eine konstante Orientierung des Werkzeugs (z. B. senkrecht zur Arbeitsfläche) festgelegt.
+2.  **Transformation (Inverse Kinematik):** Da der Roboter über seine Gelenke gesteuert wird, müssen die kartesischen Koordinaten der geglätteten Bahn mittels Inverser Kinematik in zulässige Gelenkwinkel umgerechnet werden. 
+3.  **Implizite Kollisionsprüfung:** Da ein realer Roboter eine physische Ausdehnung besitzt, muss validiert werden, ob die Bewegung der gesamten Roboterstruktur entlang der Bahn kollisionsfrei bleibt. Dies geschieht durch Diskretisierung der Bahnsegmente und Prüfung im Arbeitsraum mittels Vorwärtskinematik.
 
-2.  **Der Sonderfall (Unser Projekt):**
-    In unserer Simulation betrachten wir einen **planaren Punktroboter**. Die Freiheitsgrade des Roboters sind lediglich seine $x$- und $y$-Positionen.
-    * In diesem speziellen Fall **entspricht der Arbeitsraum dem Konfigurationsraum**. Eine Koordinate $(x, y)$ beschreibt sowohl die Position im Raum als auch den vollständigen "Gelenkzustand" des Roboters.
-    * Deshalb konnten wir direkt im Arbeitsraum planen und optimieren.
 
-3.  **Transfer auf den Roboterarm:**
-    Da unser Algorithmus einen Pfad im Arbeitsraum ($x, y$) liefert, muss dieser für einen 6-Achs-Roboter erst nutzbar gemacht werden. Die Steuerung des Roboters muss die kartesischen Koordinaten des Pfades mittels **Inverser Kinematik** in die entsprechenden Gelenkwinkel umrechnen, um die Pose physikalisch anzufahren.
+## 3. Dimensionsunabhängigkeit des Algorithmus
 
-### Bewegungsbefehle und Ansteuerung
+Ein entscheidender Vorteil des implementierten Glättungsalgorithmus (Bézier-Kurven und Inverse Rounding) ist, dass er mathematisch unabhängig von der Dimension des Raumes arbeitet. Die Vektorrechnung für die virtuellen Kontrollpunkte ($P_{2n}$) funktioniert für 6-dimensionale Gelenkwinkel-Vektoren ($q_1, \dots, q_6$) genauso wie für 2D-Koordinaten. Dies eröffnet zwei Strategien für die Ansteuerung:
 
-Da unser Algorithmus geometrische Primitive (Geraden und Parabeln) im Arbeitsraum liefert, bieten sich zwei Ansteuerungsstrategien an:
+### A. Exakte Vorgabe der Bahn (Interpolation)
+Der Algorithmus berechnet die Punkte der Parabeln bereits extern vorberechnet (diskretisiert). Der Roboter erhält eine sehr dichte Folge von Stützpunkten, die er exakt abfährt (z. B. via `SPLINE` im Arbeitsraum oder dichter `PTP`-Folge). Dies garantiert, dass die Bewegung exakt der vorberechneten, kollisionsgeprüften Geometrie entspricht.
 
-**A. Approximation durch Überschleifen (Blending)**
-Die meisten Industriesteuerungen arbeiten mit "Move"-Befehlen für Punkte. Anstatt die Kurve exakt vorzugeben, übergibt man die Eckpunkte ($P_{org}$) und einen Parameter für die Ungenauigkeit.
-* **KUKA (KRL):** `LIN P2 C_DIS` (Überschleifen basierend auf Distanz).
-* **ABB (RAPID):** `MoveL p2, v1000, z50, tool0` (ZoneData definiert den Radius).
-* *Nachteil:* Die Steuerung generiert eine eigene Kurve (oft Splines oder Polynome), die evtl. von unserer berechneten, kollisionsgeprüften Parabel abweicht.
+### B. Nutzung der steuerungsinternen Glättung (Approximation / PTP)
+Alternativ kann die Glättungsfunktionalität der Industriesteuerung (z. B. KUKA `C_PTP` oder `C_DIS`) genutzt werden, um die Datenmenge gering zu halten. Hierbei ist jedoch ein entscheidender Schritt zu beachten, um das **Inverse Rounding** (Via-Point-Verhalten) beizubehalten:
 
-**B. Exakte Bahnführung (Spline/Stützpunkte)**
-Um die von uns berechnete $G^1$-stetige Geometrie exakt abzufahren, können Spline-Befehle genutzt werden, bei denen Stützpunkte ($S, P_{2n}, E$) übergeben werden.
-* **KUKA:** Verwendung von `SPLINE`-Blöcken.
-* **Vorteil:** Der Roboter folgt exakt der im Arbeitsraum geplanten und validierten Bahn.
+Würde man der Steuerung die ursprünglichen Pfadpunkte ($P_{org}$) mit einem Überschleifradius übergeben, würde der Roboter die Ecken lediglich abschneiden ("Corner Cutting") und den gewünschten Wegpunkt verfehlen.
+Stattdessen werden die durch unseren Algorithmus berechneten **virtuellen Kontrollpunkte** ($P_{2n}$) im Gelenkwinkelraum an die Steuerung übergeben.
 
-**Fazit:**
-Der implementierte Algorithmus fungiert als **kartesischer Bahnplaner**. Er liefert eine geometrisch optimale Lösung im Arbeitsraum. Bei der Übertragung auf einen Industrieroboter übernimmt die Robotersteuerung die komplexe Aufgabe, diesen Arbeitsraumpfad (via Inverser Kinematik) in Bewegungen des Konfigurationsraums umzusetzen.
+* **Vorgehen:** Die Liste der Zielpunkte besteht aus den Koordinaten $P_{2n}$.
+* **Parameter:** Der im Algorithmus ermittelte Radius $r$ wird in den steuerungsspezifischen Überschleifparameter (z. B. KUKA `$APO.CPTP` oder `C_PTP`) umgerechnet.
+* **Effekt:** Der Roboter zielt auf den weit außen liegenden Punkt $P_{2n}$, beginnt aber frühzeitig mit dem Überschleifen. Durch die geometrische Konstruktion von $P_{2n}$ führt diese "Abkürzung" dazu, dass der Roboter den ursprünglich geplanten Punkt $P_{org}$ exakt berührt.
+
+Dies kombiniert die Vorteile der geringen Datenmenge (nur Eckpunkte übertragen) mit der geometrischen Präzision unseres Inverse-Rounding-Ansatzes.
+
+## 4. Vorteile des implementierten Algorithmus
+
+Gegenüber klassischen Verfahren der Industriesteuerungen bietet unser Ansatz signifikante Vorteile:
+
+* **Inverse Rounding vs. Corner Cutting:** Industriesteuerungen nutzen beim Überschleifen (Blending) oft ein "Abschneiden" der Ecken, wodurch der ursprüngliche Wegpunkt ($P_{org}$) verfehlt wird. Unser Algorithmus berechnet jedoch einen virtuellen Kontrollpunkt $P_{2n}$, der so weit nach außen geschoben wird, dass die resultierende Kurve den ursprünglichen Wegpunkt exakt berührt (Via-Point-Verhalten). Dies ist essenziell für Anwendungen, bei denen Positionen exakt durchfahren werden müssen (z. B. Kleben, Schweißen).
+* **Reduzierte mechanische Belastung:** Durch die $G^1$-Stetigkeit (keine Knicke) und den stetigen Krümmungsverlauf der Parabeln werden ruckartige Beschleunigungen ($\ddot{q}$) in den Gelenken vermieden. Dies schont Getriebe und Mechanik erheblich.
+* **Optimierte Zykluszeit:** Obwohl das "Inverse Rounding" die Wegstrecke geringfügig verlängert (ca. 2-3%), ermöglicht die stetige Bahnführung eine konstant hohe Bahngeschwindigkeit ohne Stopps an den Ecken. Dies führt in der Summe oft zu kürzeren Zykluszeiten als ein Stop-and-Go-Betrieb auf einer kürzeren, eckigen Bahn.
+* **Nutzung des Asymmetriefaktors $k$:** Die Möglichkeit, Kurven mittels $k$ asymmetrisch zu gestalten, erlaubt es, auf die Dynamik unterschiedlicher Achsen einzugehen (z. B. langsame Hauptachsen vs. flinke Handachsen), um das "Ausschwingen" aus Kurven zu optimieren.
