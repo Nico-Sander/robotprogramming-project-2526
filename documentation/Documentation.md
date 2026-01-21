@@ -145,7 +145,7 @@ Der entscheidende Nachteil dieses Verfahrens liegt im massiv erhöhten Rechenauf
 Für jeden Knoten werden ca. 13 verschiedene $k$-Werte getestet. Bei jedem Test muss der gesamte Pfad relaxiert ("Inverse Rounding") und auf Kollisionen geprüft werden. Dies führt zu einer Laufzeit, die in den Experimenten um den Faktor **>100** höher lag als bei der Berechnung mit einem dynamischen oder globalen $k$.
 
 **Fazit:**
-Die lokale Optimierung demonstriert das theoretische Maximum der Pfadqualität. Für praktische Anwendungen, insbesondere wenn (Neu-)Planungszeit eine Rolle spielt, ist der Grenznutzen im Vergleich zum dynamischen Standardverfahren (`k=None`) jedoch fraglich. Die dynamische Symmetrie liefert bereits sehr gute Ergebnisse bei einem Bruchteil der Rechenzeit. Der Einsatz des Coordinate Descent ist daher nur in Szenarien gerechtfertigt, in denen der Pfad einmalig offline berechnet wird und dann sehr häufig (z.B. in der Serienfertigung) zykluszeitkritisch abgefahren wird.
+Die lokale Optimierung demonstriert das theoretische Minimum der Pfadlänge. Für praktische Anwendungen, insbesondere wenn (Neu-)Planungszeit eine Rolle spielt, ist der Grenznutzen im Vergleich zum dynamischen Standardverfahren (`k=sym`) jedoch fraglich. Die dynamische Symmetrie liefert bereits sehr gute Ergebnisse bei einem Bruchteil der Rechenzeit. Der Einsatz des Coordinate Descent ist daher nur in Szenarien gerechtfertigt, in denen der Pfad einmalig offline berechnet wird und dann sehr häufig (z.B. in der Serienfertigung) zykluszeitkritisch abgefahren wird.
 
 # Umsetzung auf einem Industrieroboter (Aufgabe 3)
 
@@ -171,7 +171,7 @@ Um diesen Pfad mit einem realen 6-Achs-Roboter abzufahren, müssen folgende Schr
 Ein entscheidender Vorteil des implementierten Glättungsalgorithmus (Bézier-Kurven und Inverse Rounding) ist, dass er mathematisch unabhängig von der Dimension des Raumes arbeitet. Die Vektorrechnung für die virtuellen Kontrollpunkte ($P_{2n}$) funktioniert für 6-dimensionale Gelenkwinkel-Vektoren ($q_1, \dots, q_6$) genauso wie für 2D-Koordinaten. Dies eröffnet zwei Strategien für die Ansteuerung:
 
 ### A. Exakte Vorgabe der Bahn (Interpolation)
-Der Algorithmus berechnet die Punkte der Parabeln bereits extern vorberechnet (diskretisiert). Der Roboter erhält eine sehr dichte Folge von Stützpunkten, die er exakt abfährt (z. B. via `SPLINE` im Arbeitsraum oder dichter `PTP`-Folge). Dies garantiert, dass die Bewegung exakt der vorberechneten, kollisionsgeprüften Geometrie entspricht.
+Der Algorithmus berechnet die Punkte der Parabeln bereits extern vorberechnet (diskretisiert). Der Roboter erhält eine sehr dichte Folge von Stützpunkten, die er exakt abfährt (z. B. via `SPLINE` im Arbeitsraum oder dichter `PTP`-Folge). Dies garantiert, dass die Bewegung exakt der vorberechneten, kollisionsgeprüften Geometrie entspricht. Werden `PTP` Befehle verwendet, ist zu erwarten, dass Roboterarm sich nur stockend oder sehr langsame bewegt.
 
 ### B. Nutzung der steuerungsinternen Glättung (Approximation / PTP)
 Alternativ kann die Glättungsfunktionalität der Industriesteuerung (z. B. KUKA `C_PTP` oder `C_DIS`) genutzt werden, um die Datenmenge gering zu halten. Hierbei ist jedoch ein entscheidender Schritt zu beachten, um das **Inverse Rounding** (Via-Point-Verhalten) beizubehalten:
@@ -183,7 +183,10 @@ Stattdessen werden die durch unseren Algorithmus berechneten **virtuellen Kontro
 * **Parameter:** Der im Algorithmus ermittelte Radius $r$ wird in den steuerungsspezifischen Überschleifparameter (z. B. KUKA `$APO.CPTP` oder `C_PTP`) umgerechnet.
 * **Effekt:** Der Roboter zielt auf den weit außen liegenden Punkt $P_{2n}$, beginnt aber frühzeitig mit dem Überschleifen. Durch die geometrische Konstruktion von $P_{2n}$ führt diese "Abkürzung" dazu, dass der Roboter den ursprünglich geplanten Punkt $P_{org}$ exakt berührt.
 
-Dies kombiniert die Vorteile der geringen Datenmenge (nur Eckpunkte übertragen) mit der geometrischen Präzision unseres Inverse-Rounding-Ansatzes.
+Mit diesem Vorgehen bleibt die Datenmenge, die and die Steuerung übergeben werden muss gering, da nur die Eckpunkte mit je einem Parameter für das Überschleifen übertragen werden müssen.
+
+Da in der Praxis die internen Überschleifberechnungen von KUKA nicht exakt mit unserer Berechnung übereinstimmen und die exakte Berechnungsmethode von KUKA nicht bekannt ist, ist zu erwarten das die resultierende Bahn, die der Roboter fährt, nicht exakt der von unserem Algorithmus geplanten Bahn enspricht.
+
 
 ## 4. Vorteile des implementierten Algorithmus
 
