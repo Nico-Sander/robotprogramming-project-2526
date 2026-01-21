@@ -57,10 +57,15 @@ To run the notebooks, ensure you have the following extensions installed:
 Navigate to the `notebooks/` folder in the file explorer. There are three notebooks available depending on your needs:
 
 * **`Flyby-Optimization-with-documentation.ipynb`** (Recommended)
+
     The fundamental implementation and step-by-step execution of the optimization logic without the UI widgets. Documentation and answers to the questions from the underlying task are provided directly in the notebook
+
 * **`Flyby-Optimization-Interactive.ipynb`**
-    In this notebook is the easiest and most intuitive way to play around with differnt parameters for the Flyby optimization and see the effects on the path and performance in real-time. However to achieve this, most of the underlying logic is hidden in `interactive_widgets.py`
+
+    This notebook is the easiest and most intuitive way to play around with differnt parameters for the Flyby optimization and see the effects on the path and performance in real-time. However to achieve this, most of the underlying logic is hidden in `interactive_widgets.py`
+    
 * **`Flyby-Optimization-Interactive-with-documentation.ipynb`**
+
     The same interactive notebook but with documentation and answers to the questions from the underlying task directly in the notebook.
 
 ### 4. Select the Kernel
