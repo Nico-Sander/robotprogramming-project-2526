@@ -54,7 +54,7 @@ Ein zentrales Ergebnis der Untersuchung ist das Verhältnis zwischen dem gewähl
 
 ### Kollisionsberechnungen und Rechenzeit
 
-Die Anzahl der Kollisionsberechnungen und die damit verbundene Rechenzeit korrelieren stark mit der Komplexität der Umgebung und dem gewählten Initialradius `r_init`.
+Die Anzahl der Kollisionsberechnungen und die damit verbundene Rechenzeit korrelieren stark mit der Komplexität der Umgebung (Anzahl der Knoten) und dem gewählten Initialradius `r_init`.
 
 * **Einfluss des Radius:** Wählt man einen sehr großen Initialradius in einer engen Umgebung (z. B. Benchmark 2 oder 4), steigt die Wahrscheinlichkeit, dass die weit nach außen geschobenen Kontrollpunkte oder die resultierenden Kurvensegmente in Hindernisse ragen.
 * **Iterative Kosten:** Sobald eine Kollision detektiert wird, greift die in Aufgabe 2a beschriebene Reparaturstrategie (Reduktion von $r$). Dies erzwingt jedoch erneute Durchläufe der Optimierungsschleife, was die Anzahl der nötigen Kollisionschecks (`curveInCollision`, `lineInCollision`) und somit die Gesamtrechenzeit erhöht.
@@ -88,7 +88,15 @@ Ein kritischer Aspekt bei der Evaluierung ist der Unterschied zwischen der Stand
 2.  **Relative Symmetrie (`k=1.0`):**
     Wird $k=1.0$ gesetzt, bedeutet dies $l_o = l_i = r$. Da diese Parameter im Code jedoch als **Verhältnisfaktoren** (Prozentwerte der Segmentlänge) auf die Richtungsvektoren angewendet werden, sind die absoluten Abstände nur dann gleich, wenn auch die angrenzenden Pfadsegmente exakt gleich lang sind. Sind die Segmente unterschiedlich lang, liegen $S$ und $E$ zwar bei demselben prozentualen Anteil ihres jeweiligen Segments, haben aber unterschiedliche absolute Entfernungen zum Eckpunkt.
 
-### Diskussion der Ergebnisse
+### Analyse der Ergebnisse der Tests mit verschiedenen Werten für k
+
+1.  **Kollisions-Checks und Rechenzeit:**
+    Das Verändern des Parameter $k$ hat nur bedingt Einfluss auf die Anzahl der Kollisionschecks und die Rechenzeit. Führt ein eingestellte Parameter $k$ zu ingesamt merh Kollisionen, muss $r$ verrringert werden, sodass ein Kollisionsfreier Pfad zustande kommen kann.
+
+2.  **Einfluss auf die Pfadlänge:**
+    Im allgemeinen wird die Pfadlänge durch einen global gesetzten Parameter $k$ größer. Dies liegt daran, dass die Kurvengeometrie einen großen Einfluss darauf hat, wie gut ein Wert $k$ zur Kurve passt und wie sehr hierdurch die Länge dieser Kurve verkürzt oder verlängert wird. Da die Benchmarkszenarien aus verschiedensten Kombinationen von Kurvengeometrien bestehen, für ein globaler Wert für $k$ zu längeren Pfaden als der symmetrische Fall.
+
+### Diskussion der Ergebnisse für die globale Optimierung von k
 
 Die durchgeführten Tests mit variablen $k$-Werten zeigen, dass die Wahl eines passenden Asymmetriefaktors signifikanten Einfluss auf die Qualität und Länge des Pfades hat.
 

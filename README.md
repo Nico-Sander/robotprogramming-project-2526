@@ -56,12 +56,12 @@ To run the notebooks, ensure you have the following extensions installed:
 ### 3. Open a Notebook
 Navigate to the `notebooks/` folder in the file explorer. There are three notebooks available depending on your needs:
 
-* **`Flyby-Optimization-Interactive.ipynb`** (Recommended)
-    The main interactive dashboard. It allows you to select environments, perform parameter sweeps on Radius ($r$) and Asymmetry ($k$), and visualize the results instantly without clutter.
+* **`Flyby-Optimization-with-documentation.ipynb`** (Recommended)
+    The fundamental implementation and step-by-step execution of the optimization logic without the UI widgets. Documentation and answers to the questions from the underlying task are provided directly in the notebook
+* **`Flyby-Optimization-Interactive.ipynb`**
+    In this notebook is the easiest and most intuitive way to play around with differnt parameters for the Flyby optimization and see the effects on the path and performance in real-time. However to achieve this, most of the underlying logic is hidden in `interactive_widgets.py`
 * **`Flyby-Optimization-Interactive-with-documentation.ipynb`**
-    Contains the same interactive tools as above, but includes markdown documentation and explanations of the underlying algorithms inline.
-* **`Flyby-Optimization.ipynb`**
-    The fundamental implementation and step-by-step execution of the optimization logic without the UI widgets.
+    The same interactive notebook but with documentation and answers to the questions from the underlying task directly in the notebook.
 
 ### 4. Select the Kernel
 To use the dependencies installed by `uv`, you must select the correct virtual environment:
@@ -70,7 +70,7 @@ To use the dependencies installed by `uv`, you must select the correct virtual e
 3.  Select the environment marked as **.venv** (or `.venv/bin/python`). This environment was automatically created by the `uv sync` command.
 
 ### 5. Run the Optimization
-You can now execute the cells. The notebooks provide widgets to visualize the environment and adjust parameters in real-time.
+Execute the cells one-by-one, play with the paramters via the sliders and see how the optimized paths are affected.
 
 ## Project Structure
 
@@ -104,4 +104,19 @@ The project logic is modularized within the `src/` directory to separate algorit
 
 ## Task and Documentation
 
-The underlying Task can be seen in `Documenation/Task.md` and the whole Documentation in `Documentation/Documentation.md`
+- This project was developed according to underlying tasks and requirements. The tasks can be found in [documentation/Task.md](documentation/Task.md).
+
+- Answers to the Questions from the task can either be seen in the notebooks:
+    - [Flyby-Optimization-with-documenation](notebooks/Flyby-Optimization-with-documentation.ipynb) (Recommended)
+
+    - [Flyby-Optimization-Interactive-with-documentation](notebooks/Flyby-Optimization-Interactive-with-documentation.ipynb)
+
+    - or without any code in the Markdown file [Documentation.md](documentation/Documentation.md)
+
+- A non-interactive way to see the results of our work and the documentation is by viewing the HTML-version of the first notebook. [documentation/Flyby-Optimization-with-documentation.html](documentation/Flyby-Optimization-with-documentation.html)
+
+## Authors
+
+- Marlon Leitschuh  -   lema1046@h-ka.de
+- Pascal Pawliczek  -   papa1021@h-ka.de
+- Nico Sander       -   sani1019@h-ka.de

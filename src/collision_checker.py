@@ -270,16 +270,16 @@ class CollisionChecker(object):
         Visualizes the detailed G1-smooth path, including Bezier curves, control points, and geometric parameters.
 
         This method reconstructs the full geometry of the optimized path for verification and debugging. 
-        It does not rely on a simple list of points; instead, it reads the geometric parameters ($r$, $fixed\_k$, $P_{2n}$) 
-        stored in the graph nodes and recalculates the exact tangent points ($S$, $E$) and curve trajectory.
+        It does not rely on a simple list of points; instead, it reads the geometric parameters (r, fixed_k, P_2n) 
+        stored in the graph nodes and recalculates the exact tangent points (S, E) and curve trajectory.
         This ensures the visualization matches the collision checking logic exactly.
 
         Visual elements included:
         - **Grey Dashed Line**: The original unoptimized path.
         - **Black Dashed Line**: The "New Straight Path" (control polygon) connecting the optimized control points.
         - **Blue Curves**: The Quadratic Bezier segments.
-        - **Red Stars**: The virtual control points ($P_{2n}$) governing the curves.
-        - **Text Labels**: Annotations showing the specific radius ($r$) and asymmetry ($k$) values at each corner.
+        - **Red Stars**: The virtual control points (P_2n) governing the curves.
+        - **Text Labels**: Annotations showing the specific radius (r) and asymmetry (k) values at each corner.
 
         Parameters:
             optimized_results (list): Output from the optimizer, a list of (node_name, radius) tuples.
